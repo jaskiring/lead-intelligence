@@ -1,0 +1,14 @@
+# config.py
+
+ADMIN_PASSWORD = "admin123"
+
+REP_PASSWORDS = {
+    "Rahul": "rahul123",
+    "Amit": "amit123",
+    "Priya": "priya123",
+}
+
+SHEET_NAME = "lead_intelligence_db"
+WORKSHEET_NAME = "leads_master"
+
+LEAD_KEY_FIELD = "phone"   # later can change to CRM ID
