@@ -1,12 +1,7 @@
 # config.py
 
-ADMIN_PASSWORD = "admin123"
-
-REP_PASSWORDS = {
-    "Rahul": "rahul123",
-    "Amit": "amit123",
-    "Priya": "priya123",
-}
+ADMIN_PASSWORD = st.secrets["auth"]["admin_password"]
+REP_PASSWORDS = st.secrets["auth"]["reps"]
 
 SHEET_NAME = "lead_intelligence_db"
 WORKSHEET_NAME = "leads_master"
