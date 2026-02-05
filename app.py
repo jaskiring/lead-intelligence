@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from scoring import score_leads
 from sheets import open_sheet, load_leads, upsert_leads, atomic_pick
 
+
 # -----------------------
 # CONFIG
 # -----------------------
@@ -13,6 +14,7 @@ WORKSHEET_NAME = "leads_master"
 
 ADMIN_PASSWORD = st.secrets["auth"]["admin_password"]
 REP_PASSWORDS = dict(st.secrets["auth"]["reps"])
+
 
 # -----------------------
 # SESSION
@@ -34,6 +36,7 @@ def get_sheet():
 
 sheet = get_sheet()
 
+
 # -----------------------
 # UI
 # -----------------------
@@ -42,9 +45,10 @@ st.title("🧠 Lead Intelligence Portal")
 
 tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 
-# -----------------------
+
+# ======================
 # DASHBOARD
-# -----------------------
+# ======================
 with tabs[0]:
     df = load_leads(sheet)
     if df.empty:
@@ -52,9 +56,10 @@ with tabs[0]:
     else:
         st.dataframe(df, use_container_width=True)
 
-# -----------------------
+
+# ======================
 # REP DRAWER
-# -----------------------
+# ======================
 with tabs[1]:
     if not st.session_state.rep_name:
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
@@ -73,7 +78,9 @@ with tabs[1]:
             with st.expander(f"{row['phone']} | {row['intent_band']}"):
                 if st.button("Pick Lead", key=row["phone"]):
                     ok, msg = atomic_pick(
-                        sheet, row["phone"], st.session_state.rep_name
+                        sheet,
+                        phone=row["phone"],
+                        rep_name=st.session_state.rep_name,
                     )
                     if ok:
                         st.success(msg)
@@ -81,9 +88,10 @@ with tabs[1]:
                     else:
                         st.error(msg)
 
-# -----------------------
+
+# ======================
 # ADMIN
-# -----------------------
+# ======================
 with tabs[2]:
     if not st.session_state.admin_ok:
         pwd = st.text_input("Admin Password", type="password")
