@@ -30,12 +30,44 @@ if "admin_ok" not in st.session_state:
 # GOOGLE SHEETS CONNECT
 # -----------------------
 @st.cache_resource
+@st.cache_resource
 def get_sheet():
-    return connect_sheet(
-        json_path="service_account.json",  # replaced by secrets in cloud
-        worksheet_name=WORKSHEET_NAME
+    from google.oauth2.service_account import Credentials
+    import gspread
+
+    creds = Credentials.from_service_account_info(
+        st.secrets["google_service_account"],
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
     )
 
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key(
+        "1JjcxzsJpf-s92-w_Mc10K3dL_SewejThMLzj4O-7pbs"
+    ).worksheet(WORKSHEET_NAME)
+
+    return sheet
+    from google.oauth2.service_account import Credentials
+    import json
+
+    creds_dict = json.loads(st.secrets["service_account_json"])
+    creds = Credentials.from_service_account_info(
+        creds_dict,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
+
+    import gspread
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key(
+        "1JjcxzsJpf-s92-w_Mc10K3dL_SewejThMLzj4O-7pbs"
+    ).worksheet(WORKSHEET_NAME)
+
+    return sheet
 sheet = get_sheet()
 
 # -----------------------
