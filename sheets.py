@@ -2,91 +2,115 @@ import pandas as pd
 from datetime import datetime, timezone
 
 
+INTERNAL_COLUMNS = [
+    "phone",
+    "name",
+    "reason",
+    "timeline",
+    "city",
+    "objection_type",
+    "call_outcome",
+    "consultation_status",
+    "status",
+    "intent_score",
+    "intent_band",
+    "lead_state",
+    "picked",
+    "picked_by",
+    "picked_at",
+    "last_refresh",
+]
+
+
+def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
+    """Map Refrens CSV → internal schema"""
+
+    mapped = pd.DataFrame()
+
+    mapped["phone"] = (
+        df.get("Phone")
+        .fillna(df.get("phone_number"))
+        .astype(str)
+        .str.strip()
+    )
+
+    mapped["name"] = df.get("Contact Name", "")
+
+    mapped["reason"] = df.get(
+        "what_is_the_main_reason_you're_considering_lasik_surgery?"
+    )
+
+    mapped["timeline"] = df.get(
+        "when_would_you_prefer_to_undergo_the_lasik_treatment?"
+    )
+
+    mapped["city"] = df.get("which_city_would_you_prefer_for_treatment_")
+
+    mapped["objection_type"] = df.get("Objection Type")
+    mapped["call_outcome"] = df.get("Call Outcome")
+    mapped["consultation_status"] = df.get("Consultation Status")
+    mapped["status"] = df.get("Status")
+
+    return mapped
+
+
 def load_leads(sheet):
     records = sheet.get_all_records()
     if not records:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=INTERNAL_COLUMNS)
     return pd.DataFrame(records)
 
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Map external CSV headers to internal canonical schema
-    """
-    column_map = {
-        "Phone": "phone",
-        "phone_number": "phone",
-        "Contact Name": "name",
-        "Contact": "name",
-    }
+def upsert_leads(sheet, df: pd.DataFrame):
+    existing = load_leads(sheet)
 
-    for src, dst in column_map.items():
-        if src in df.columns and dst not in df.columns:
-            df[dst] = df[src]
-
-    return df
-
-
-def upsert_leads(sheet, df: pd.DataFrame, lead_key="phone"):
-    df = normalize_columns(df)
-
-    if lead_key not in df.columns:
-        raise ValueError(f"Missing required key column: {lead_key}")
-
-    existing = sheet.get_all_records()
-    existing_df = pd.DataFrame(existing)
-
-    # First write (empty sheet)
-    if existing_df.empty:
+    if existing.empty:
         sheet.update(
-            [df.columns.tolist()] + df.fillna("").astype(str).values.tolist()
+            [INTERNAL_COLUMNS]
+            + df.reindex(columns=INTERNAL_COLUMNS)
+            .fillna("")
+            .astype(str)
+            .values.tolist()
         )
         return
 
-    existing_df = normalize_columns(existing_df)
+    existing.set_index("phone", inplace=True)
+    df.set_index("phone", inplace=True)
 
-    existing_df.set_index(lead_key, inplace=True)
-    df.set_index(lead_key, inplace=True)
-
-    for key, row in df.iterrows():
-        if key in existing_df.index:
-            row_idx = existing_df.index.get_loc(key) + 2
-            for col, val in row.items():
-                if col not in existing_df.columns:
-                    continue
-                col_idx = existing_df.columns.get_loc(col) + 1
-                sheet.update_cell(row_idx, col_idx, str(val))
+    for phone, row in df.iterrows():
+        if phone in existing.index:
+            row_idx = existing.index.get_loc(phone) + 2
+            for col in INTERNAL_COLUMNS:
+                sheet.update_cell(
+                    row_idx,
+                    INTERNAL_COLUMNS.index(col) + 1,
+                    str(row.get(col, "")),
+                )
         else:
             sheet.append_row(
-                [row.get(col, "") for col in existing_df.columns]
+                [row.get(col, "") for col in INTERNAL_COLUMNS]
             )
 
 
 def atomic_pick(sheet, phone: str, rep_name: str):
-    records = sheet.get_all_records()
-    df = pd.DataFrame(records)
-
-    df = normalize_columns(df)
-
-    if "picked" not in df.columns:
-        df["picked"] = ""
-        df["picked_by"] = ""
-        df["picked_at"] = ""
+    df = load_leads(sheet)
 
     if phone not in df["phone"].astype(str).values:
         return False, "Lead not found"
 
-    row_idx = df.index[df["phone"].astype(str) == str(phone)][0] + 2
+    row_idx = df.index[df["phone"].astype(str) == phone][0] + 2
 
     if str(df.loc[row_idx - 2, "picked"]).lower() == "true":
-        return False, "Lead already picked"
+        return False, "Already picked"
 
-    sheet.update_cell(row_idx, df.columns.get_loc("picked") + 1, "TRUE")
-    sheet.update_cell(row_idx, df.columns.get_loc("picked_by") + 1, rep_name)
+    now = datetime.now(timezone.utc).isoformat()
+
+    sheet.update_cell(row_idx, INTERNAL_COLUMNS.index("picked") + 1, "TRUE")
     sheet.update_cell(
-        row_idx,
-        df.columns.get_loc("picked_at") + 1,
-        datetime.now(timezone.utc).isoformat(),
+        row_idx, INTERNAL_COLUMNS.index("picked_by") + 1, rep_name
+    )
+    sheet.update_cell(
+        row_idx, INTERNAL_COLUMNS.index("picked_at") + 1, now
     )
 
     return True, "Picked"
