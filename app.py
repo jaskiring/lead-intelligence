@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
+import logging
 
 from scoring import score_leads
 from sheets import (
@@ -9,6 +10,13 @@ from sheets import (
     upsert_leads,
     atomic_pick,
 )
+
+# ---------------- LOGGING
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+log = logging.getLogger(__name__)
 
 # ---------------- CONFIG
 WORKSHEET_NAME = "leads_master"
@@ -50,6 +58,12 @@ tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 # ======================================================
 with tabs[0]:
     df = load_leads(sheet)
+
+    st.subheader("DEBUG")
+    st.write("Columns:", list(df.columns))
+    st.write("Phone sample:", df.get("phone", "").head(10).tolist())
+
+    st.subheader("Leads")
     st.dataframe(df, use_container_width=True)
 
 # ======================================================
