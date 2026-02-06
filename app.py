@@ -5,21 +5,18 @@ from datetime import datetime, timezone
 from scoring import score_leads
 from sheets import load_leads, upsert_leads, atomic_pick
 
-# ---------------- CONFIG ----------------
+# -----------------------
+# CONFIG
+# -----------------------
 WORKSHEET_NAME = "leads_master"
 SPREADSHEET_ID = "1JjcxzsJpf-s92-w_Mc10K3dL_SewejThMLzj4O-7pbs"
 
 ADMIN_PASSWORD = st.secrets["auth"]["admin_password"]
 REP_PASSWORDS = st.secrets["auth"]["reps"]
 
-# ---------------- SESSION ----------------
-if "rep_name" not in st.session_state:
-    st.session_state.rep_name = None
-
-if "admin_ok" not in st.session_state:
-    st.session_state.admin_ok = False
-
-# ---------------- SHEET ----------------
+# -----------------------
+# GOOGLE SHEET
+# -----------------------
 @st.cache_resource
 def get_sheet():
     from google.oauth2.service_account import Credentials
@@ -32,56 +29,48 @@ def get_sheet():
             "https://www.googleapis.com/auth/drive",
         ],
     )
+
     client = gspread.authorize(creds)
     return client.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
 
+
 sheet = get_sheet()
 
-# ---------------- CSV NORMALIZER ----------------
-def normalize_csv(df):
-    df.columns = [c.strip() for c in df.columns]
+# -----------------------
+# SESSION
+# -----------------------
+st.session_state.setdefault("rep_name", None)
+st.session_state.setdefault("admin_ok", False)
 
-    phone_candidates = [
-        "phone",
-        "Phone",
-        "phone_number",
-        "Phone Number",
-        "mobile",
-    ]
-
-    for c in phone_candidates:
-        if c in df.columns:
-            df["phone"] = df[c].astype(str)
-            break
-
-    if "phone" not in df.columns:
-        raise ValueError("CSV must contain phone column")
-
-    return df
-
-# ---------------- UI ----------------
-st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
+# -----------------------
+# UI
+# -----------------------
+st.set_page_config("Lead Intelligence Portal", layout="wide")
 st.title("🧠 Lead Intelligence Portal")
 
 tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 
-# ================= DASHBOARD =================
+# =======================
+# DASHBOARD
+# =======================
 with tabs[0]:
     df = load_leads(sheet)
     if df.empty:
-        st.info("No leads available")
+        st.info("No leads yet.")
     else:
         st.dataframe(df, use_container_width=True)
 
-# ================= REP DRAWER =================
+# =======================
+# REP DRAWER
+# =======================
 with tabs[1]:
     if not st.session_state.rep_name:
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
         pwd = st.text_input("Password", type="password")
-        if st.button("Login"):
-            if REP_PASSWORDS.get(name) == pwd:
+        if st.button("Start Session"):
+            if REP_PASSWORDS[name] == pwd:
                 st.session_state.rep_name = name
-                st.rerun()
+                st.success(f"Logged in as {name}")
             else:
                 st.error("Invalid password")
     else:
@@ -89,54 +78,65 @@ with tabs[1]:
 
         df = load_leads(sheet)
 
-        cols = st.columns(3)
-        for i, row in df.iterrows():
-            col = cols[i % 3]
-            phone = row["phone"]
+        if df.empty:
+            st.info("No leads available.")
+        else:
+            df["picked"] = df.get("picked", "").astype(str)
 
-            with col:
-                st.markdown(
-                    f"""
-                    <div style="background:#0f172a;padding:14px;border-radius:10px">
-                        <h4>📱 {phone}</h4>
-                        <p><b>Intent:</b> {row.get('Intent Band')}</p>
-                        <p><b>City:</b> {row.get('Customer City')}</p>
-                        <p><b>Reason:</b> {row.get("what_is_the_main_reason_you're_considering_lasik_surgery?")}</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            cols = st.columns(3)
 
-                if row.get("picked") is True:
-                    st.error(f"Picked by {row.get('picked_by')}")
-                else:
-                    if st.button("Pick Lead", key=f"pick_{phone}_{i}"):
-                        ok, msg = atomic_pick(sheet, phone, st.session_state.rep_name)
-                        if ok:
-                            st.success("Picked")
-                            st.rerun()
-                        else:
-                            st.error(msg)
+            for i, row in df.iterrows():
+                with cols[i % 3]:
+                    st.markdown(
+                        f"""
+                        <div style="padding:15px;border-radius:12px;background:#0f172a">
+                        <b>📱 {row.get("phone","-")}</b><br>
+                        🎯 Intent: {row.get("Intent Band","-")}<br>
+                        🕒 Timeline: {row.get("when_would_you_prefer_to_undergo_the_lasik_treatment?","-")}<br>
+                        🏙 City: {row.get("which_city_would_you_prefer_for_treatment_","-")}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-# ================= ADMIN =================
+                    if str(row.get("picked")).lower() == "true":
+                        st.error(f"🔒 Picked by {row.get('picked_by')}")
+                    else:
+                        if st.button(
+                            "✅ Pick Lead",
+                            key=f"pick_{row.get('phone')}",
+                        ):
+                            ok, msg = atomic_pick(
+                                sheet,
+                                phone=row.get("phone"),
+                                rep_name=st.session_state.rep_name,
+                            )
+                            if ok:
+                                st.success("Picked")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+# =======================
+# ADMIN
+# =======================
 with tabs[2]:
     if not st.session_state.admin_ok:
         pwd = st.text_input("Admin Password", type="password")
         if st.button("Unlock"):
             if pwd == ADMIN_PASSWORD:
                 st.session_state.admin_ok = True
-                st.rerun()
+                st.success("Admin unlocked")
             else:
                 st.error("Wrong password")
     else:
-        uploaded = st.file_uploader("Upload CSV", type=["csv"])
-        if uploaded:
-            df = pd.read_csv(uploaded)
-            df = normalize_csv(df)
+        file = st.file_uploader("Upload Refrens CSV", type=["csv"])
+        if file:
+            df = pd.read_csv(file)
             st.dataframe(df.head())
 
             if st.button("Run Scoring + Update"):
-                scored = score_leads(df)
-                scored["last_refresh"] = datetime.now(timezone.utc).isoformat()
-                upsert_leads(sheet, scored)
-                st.success("Sheet updated successfully")
+                df = score_leads(df)
+                df["last_refresh"] = datetime.now(timezone.utc).isoformat()
+                upsert_leads(sheet, df, lead_key="phone")
+                st.success("Sheet updated")
