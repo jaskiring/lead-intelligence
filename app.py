@@ -255,7 +255,47 @@ with tabs[1]:
                 for col, (_, row) in zip(cols, group.iterrows()):
                     with col:
                         render_lead_card(row, allow_pick=False)
+# ======================================================
+# RECOVERABLE LOST LEADS
+# ======================================================
+with tabs[2]:
+    df = load_leads(sheet)
+    df = compute_sla(df)
+    df = sort_for_rep_drawer(df)
 
+    recoverable = df[
+        (df["status"].str.lower() == "lost") &
+        (df["intent_band"].isin(["High", "Medium"])) &
+        (df["consultation_status"].str.lower() != "done") &
+        (~df["objection_type"].str.lower().isin(
+            ["not interested", "spam", "invalid"]
+        ))
+    ]
+
+    if recoverable.empty:
+        st.info("No recoverable lost leads right now.")
+    else:
+        rows = [recoverable.iloc[i:i+3] for i in range(0, len(recoverable), 3)]
+
+        for group in rows:
+            cols = st.columns(3)
+            for col, (_, row) in zip(cols, group.iterrows()):
+                with col:
+                    render_lead_card(row, allow_pick=False)
+
+                    # Retry strategy
+                    objection = row.get("objection_type", "").lower()
+
+                    if "timing" in objection:
+                        strategy = "Create urgency (age, outcomes, limited slots)"
+                    elif "cost" in objection or "insurance" in objection:
+                        strategy = "Reframe value, financing, outcomes"
+                    elif "no response" in objection:
+                        strategy = "Soft re-entry + reassurance"
+                    else:
+                        strategy = "Rebuild trust + low-commitment consultation"
+
+                    st.warning(f"🔁 Suggested retry: {strategy}")
 # ======================================================
 # ADMIN
 # ======================================================
