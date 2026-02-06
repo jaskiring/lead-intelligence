@@ -9,11 +9,10 @@ from sheets import load_leads, upsert_leads, atomic_pick
 # CONFIG
 # -----------------------
 WORKSHEET_NAME = "leads_master"
+SPREADSHEET_ID = "1JjcxzsJpf-s92-w_Mc10K3dL_SewejThMLzj4O-7pbs"
 
 ADMIN_PASSWORD = st.secrets["auth"]["admin_password"]
 REP_PASSWORDS = st.secrets["auth"]["reps"]
-
-SPREADSHEET_ID = "1JjcxzsJpf-s92-w_Mc10K3dL_SewejThMLzj4O-7pbs"
 
 # -----------------------
 # SESSION
@@ -25,7 +24,7 @@ if "admin_ok" not in st.session_state:
     st.session_state.admin_ok = False
 
 # -----------------------
-# GOOGLE SHEETS
+# GOOGLE SHEET
 # -----------------------
 @st.cache_resource
 def get_sheet():
@@ -46,7 +45,7 @@ def get_sheet():
 sheet = get_sheet()
 
 # -----------------------
-# SLA LOGIC
+# SLA
 # -----------------------
 def compute_sla(df):
     if "last_refresh" not in df.columns:
@@ -86,36 +85,18 @@ tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 # DASHBOARD
 # =======================
 with tabs[0]:
-    st.subheader("All Leads")
-
     df = load_leads(sheet)
 
     if df.empty:
         st.info("No leads available.")
     else:
         df = compute_sla(df)
-
-        if "last_refresh" in df.columns:
-            df = df.sort_values(
-                by=["sla_status", "intent_score"],
-                ascending=[True, False]
-            )
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            column_config={
-                "sla_status": st.column_config.TextColumn("SLA Status"),
-                "lead_age_days": st.column_config.NumberColumn("Age (Days)")
-            }
-        )
+        st.dataframe(df, use_container_width=True)
 
 # =======================
 # REP DRAWER
 # =======================
 with tabs[1]:
-    st.subheader("Rep Drawer")
-
     if not st.session_state.rep_name:
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
         pwd = st.text_input("Password", type="password")
@@ -126,7 +107,6 @@ with tabs[1]:
                 st.success(f"Logged in as {name}")
             else:
                 st.error("Invalid password")
-
     else:
         st.success(f"Logged in as {st.session_state.rep_name}")
 
@@ -134,26 +114,27 @@ with tabs[1]:
         df = compute_sla(df)
 
         available = df[(df["picked"] != True) | (df["picked"].isna())]
-        available = available.sort_values(
-            by=["intent_band", "intent_score"],
-            ascending=[True, False]
-        )
 
         if available.empty:
-            st.info("No available leads.")
+            st.info("No leads available.")
         else:
             for _, row in available.iterrows():
+                phone = str(row.get("phone"))
+
                 with st.expander(
-                    f"{row.get('phone')} | {row.get('intent_band')} | {row.get('sla_status')}"
+                    f"{phone} | {row.get('intent_band')} | {row.get('sla_status')}"
                 ):
                     st.write(f"Intent Score: {row.get('intent_score')}")
                     st.write(f"Lead State: {row.get('lead_state')}")
                     st.write(f"Age (days): {row.get('lead_age_days')}")
 
-                    if st.button(f"Pick Lead {row.get('phone')}"):
+                    if st.button(
+                        "Pick Lead",
+                        key=f"pick_{phone}"  # ✅ UNIQUE KEY FIX
+                    ):
                         success, msg = atomic_pick(
                             sheet,
-                            phone=row.get("phone"),
+                            phone=phone,
                             rep_name=st.session_state.rep_name
                         )
 
@@ -167,8 +148,6 @@ with tabs[1]:
 # ADMIN
 # =======================
 with tabs[2]:
-    st.subheader("Admin Panel")
-
     if not st.session_state.admin_ok:
         admin_pwd = st.text_input("Admin Password", type="password")
         if st.button("Unlock Admin"):
@@ -177,7 +156,6 @@ with tabs[2]:
                 st.success("Admin unlocked")
             else:
                 st.error("Wrong password")
-
     else:
         uploaded = st.file_uploader("Upload Refrens CSV", type=["csv"])
         if uploaded:
