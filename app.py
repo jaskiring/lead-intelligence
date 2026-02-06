@@ -65,9 +65,7 @@ def compute_sla(df):
 
     def sla(row):
         if row.get("intent_band") == "High":
-            if row.get("lead_age_days", 0) >= 7:
-                return "🔴 Urgent"
-            return "🟢 Within SLA"
+            return "🔴 Urgent" if row.get("lead_age_days", 0) >= 7 else "🟢 Within SLA"
         return ""
 
     df["sla_status"] = df.apply(sla, axis=1)
@@ -86,7 +84,6 @@ tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 # =======================
 with tabs[0]:
     df = load_leads(sheet)
-
     if df.empty:
         st.info("No leads available.")
     else:
@@ -118,8 +115,8 @@ with tabs[1]:
         if available.empty:
             st.info("No leads available.")
         else:
-            for _, row in available.iterrows():
-                phone = str(row.get("phone"))
+            for idx, row in available.iterrows():
+                phone = str(row.get("phone", "")).strip()
 
                 with st.expander(
                     f"{phone} | {row.get('intent_band')} | {row.get('sla_status')}"
@@ -128,12 +125,12 @@ with tabs[1]:
                     st.write(f"Lead State: {row.get('lead_state')}")
                     st.write(f"Age (days): {row.get('lead_age_days')}")
 
-                    if st.button(
-                        "Pick Lead",
-                        key=f"pick_{phone}"  # ✅ UNIQUE KEY FIX
-                    ):
+                    # ✅ ABSOLUTELY UNIQUE KEY
+                    button_key = f"pick_{idx}_{phone}"
+
+                    if st.button("Pick Lead", key=button_key):
                         success, msg = atomic_pick(
-                            sheet,
+                            sheet=sheet,
                             phone=phone,
                             rep_name=st.session_state.rep_name
                         )
