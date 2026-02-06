@@ -74,13 +74,10 @@ def compute_sla(df):
 # -----------------------
 # PAGE CONFIG
 # -----------------------
-st.set_page_config(
-    page_title="Lead Intelligence Portal",
-    layout="wide",
-)
+st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
 
 # -----------------------
-# CUSTOM CSS (UI POLISH)
+# STYLES
 # -----------------------
 st.markdown("""
 <style>
@@ -91,10 +88,15 @@ st.markdown("""
     border: 1px solid #1f2937;
     margin-bottom: 16px;
 }
+.lead-card.picked {
+    background: #0f172a;
+    opacity: 0.6;
+}
 .intent-high { color: #f87171; font-weight: 700; }
 .intent-medium { color: #facc15; font-weight: 700; }
 .intent-low { color: #34d399; font-weight: 700; }
 .small { font-size: 0.85rem; color: #9ca3af; }
+.locked { color: #f87171; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -102,7 +104,6 @@ st.markdown("""
 # HEADER
 # -----------------------
 st.title("🧠 Lead Intelligence Portal")
-
 tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 
 # =======================
@@ -117,18 +118,18 @@ with tabs[0]:
         st.dataframe(df, use_container_width=True)
 
 # =======================
-# REP DRAWER (TILES)
+# REP DRAWER
 # =======================
 with tabs[1]:
     if not st.session_state.rep_name:
-        st.subheader("Start Your Session")
+        st.subheader("Start Session")
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
         pwd = st.text_input("Password", type="password")
 
         if st.button("Start Session"):
             if REP_PASSWORDS.get(name) == pwd:
                 st.session_state.rep_name = name
-                st.success(f"Welcome {name}")
+                st.success(f"Logged in as {name}")
                 st.rerun()
             else:
                 st.error("Invalid password")
@@ -138,38 +139,43 @@ with tabs[1]:
         df = load_leads(sheet)
         df = compute_sla(df)
 
-        available = df[(df["picked"] != True) | (df["picked"].isna())]
+        cols = st.columns(3)
 
-        if available.empty:
-            st.info("No leads available.")
-        else:
-            cols = st.columns(3)
+        for idx, row in df.iterrows():
+            col = cols[idx % 3]
 
-            for idx, row in available.iterrows():
-                col = cols[idx % 3]
-                phone = str(row.get("phone", "")).strip()
-                intent = row.get("intent_band", "")
-                sla = row.get("sla_status", "")
+            phone = str(row.get("phone", "")).strip()
+            intent = row.get("intent_band", "")
+            sla = row.get("sla_status", "")
+            picked = bool(row.get("picked"))
+            picked_by = row.get("picked_by")
 
-                intent_class = (
-                    "intent-high" if intent == "High"
-                    else "intent-medium" if intent == "Medium"
-                    else "intent-low"
-                )
+            intent_class = (
+                "intent-high" if intent == "High"
+                else "intent-medium" if intent == "Medium"
+                else "intent-low"
+            )
 
-                with col:
-                    st.markdown(f"""
-                    <div class="lead-card">
-                        <div><strong>📱 {phone}</strong></div>
-                        <div class="{intent_class}">🧠 {intent} Intent</div>
-                        <div class="small">🚦 {sla}</div>
-                        <div class="small">⏱ Age: {row.get("lead_age_days")} days</div>
-                        <hr style="border-color:#1f2937">
-                        <div class="small">📍 City: {row.get("Customer City","-")}</div>
-                        <div class="small">📅 Timeline: {row.get("when_would_you_prefer_to_undergo_the_lasik_treatment?","-")}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+            card_class = "lead-card picked" if picked else "lead-card"
 
+            with col:
+                st.markdown(f"""
+                <div class="{card_class}">
+                    <div><strong>📱 {phone}</strong></div>
+                    <div class="{intent_class}">🧠 {intent} Intent</div>
+                    <div class="small">🚦 {sla}</div>
+                    <div class="small">⏱ Age: {row.get("lead_age_days")} days</div>
+                    <hr style="border-color:#1f2937">
+                    <div class="small">📍 City: {row.get("Customer City","-")}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if picked:
+                    st.markdown(
+                        f"<div class='locked'>🔒 Picked by {picked_by}</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
                     if st.button(
                         "✅ Pick Lead",
                         key=f"pick_{idx}_{phone}"
@@ -179,7 +185,6 @@ with tabs[1]:
                             phone=phone,
                             rep_name=st.session_state.rep_name
                         )
-
                         if success:
                             st.success("Lead picked")
                             st.rerun()
