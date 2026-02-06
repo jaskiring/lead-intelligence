@@ -1,58 +1,69 @@
 import pandas as pd
 from datetime import datetime, timezone
-import gspread
 
-# -----------------------
-# LOAD
-# -----------------------
 def load_leads(sheet):
     records = sheet.get_all_records()
-    return pd.DataFrame(records)
+    if not records:
+        return pd.DataFrame()
 
-# -----------------------
-# UPSERT
-# -----------------------
+    df = pd.DataFrame(records)
+
+    # ✅ NORMALIZE PICKED FIELD
+    if "picked" in df.columns:
+        df["picked"] = df["picked"].apply(
+            lambda x: True if str(x).lower() in ["true", "1", "yes"] else False
+        )
+
+    return df
+
+
 def upsert_leads(sheet, df, lead_key="phone"):
     existing = sheet.get_all_records()
-    existing_df = pd.DataFrame(existing)
-
-    if existing_df.empty:
+    if not existing:
         sheet.update([df.columns.tolist()] + df.values.tolist())
         return
 
+    existing_df = pd.DataFrame(existing)
     existing_df.set_index(lead_key, inplace=True)
-    df.set_index(lead_key, inplace=True)
+    df = df.set_index(lead_key)
 
-    for key, row in df.iterrows():
-        if key in existing_df.index:
-            row_idx = existing_df.index.get_loc(key) + 2
+    for phone, row in df.iterrows():
+        if phone in existing_df.index:
+            row_idx = existing_df.index.get_loc(phone) + 2
             for col, val in row.items():
                 col_idx = existing_df.columns.get_loc(col) + 1
                 sheet.update_cell(row_idx, col_idx, val)
         else:
             sheet.append_row(row.tolist())
 
-# -----------------------
-# ATOMIC PICK (CRITICAL)
-# -----------------------
+
 def atomic_pick(sheet, phone, rep_name):
     records = sheet.get_all_records()
+    if not records:
+        return False, "No data"
+
     df = pd.DataFrame(records)
 
-    if df.empty or phone not in df["phone"].astype(str).values:
+    df["picked"] = df["picked"].apply(
+        lambda x: True if str(x).lower() in ["true", "1", "yes"] else False
+    )
+
+    match = df[df["phone"].astype(str) == str(phone)]
+
+    if match.empty:
         return False, "Lead not found"
 
-    row_idx = df.index[df["phone"].astype(str) == phone][0] + 2
+    idx = match.index[0]
 
-    picked = df.loc[df["phone"].astype(str) == phone, "picked"].values[0]
+    if df.loc[idx, "picked"] is True:
+        return False, f"Already picked by {df.loc[idx, 'picked_by']}"
 
-    if picked is True:
-        return False, "Lead already picked"
+    row_number = idx + 2
 
-    sheet.update_cell(row_idx, df.columns.get_loc("picked") + 1, True)
-    sheet.update_cell(row_idx, df.columns.get_loc("picked_by") + 1, rep_name)
+    sheet.update_cell(row_number, df.columns.get_loc("picked") + 1, True)
+    sheet.update_cell(row_number, df.columns.get_loc("picked_by") + 1, rep_name)
     sheet.update_cell(
-        row_idx,
+        row_number,
         df.columns.get_loc("picked_at") + 1,
         datetime.now(timezone.utc).isoformat()
     )

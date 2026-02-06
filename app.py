@@ -45,65 +45,11 @@ def get_sheet():
 sheet = get_sheet()
 
 # -----------------------
-# SLA
-# -----------------------
-def compute_sla(df):
-    if "last_refresh" not in df.columns:
-        df["lead_age_days"] = ""
-        df["sla_status"] = ""
-        return df
-
-    now = datetime.now(timezone.utc)
-
-    def age_days(ts):
-        try:
-            return (now - datetime.fromisoformat(ts)).days
-        except:
-            return ""
-
-    df["lead_age_days"] = df["last_refresh"].apply(age_days)
-
-    def sla(row):
-        if row.get("intent_band") == "High":
-            return "🔴 Urgent" if row.get("lead_age_days", 0) >= 7 else "🟢 Within SLA"
-        return "⚪ Normal"
-
-    df["sla_status"] = df.apply(sla, axis=1)
-    return df
-
-# -----------------------
-# PAGE CONFIG
+# UI
 # -----------------------
 st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
-
-# -----------------------
-# STYLES
-# -----------------------
-st.markdown("""
-<style>
-.lead-card {
-    border-radius: 14px;
-    padding: 16px;
-    background: #111827;
-    border: 1px solid #1f2937;
-    margin-bottom: 16px;
-}
-.lead-card.picked {
-    background: #0f172a;
-    opacity: 0.6;
-}
-.intent-high { color: #f87171; font-weight: 700; }
-.intent-medium { color: #facc15; font-weight: 700; }
-.intent-low { color: #34d399; font-weight: 700; }
-.small { font-size: 0.85rem; color: #9ca3af; }
-.locked { color: #f87171; font-weight: 600; }
-</style>
-""", unsafe_allow_html=True)
-
-# -----------------------
-# HEADER
-# -----------------------
 st.title("🧠 Lead Intelligence Portal")
+
 tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 
 # =======================
@@ -111,25 +57,19 @@ tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 # =======================
 with tabs[0]:
     df = load_leads(sheet)
-    if df.empty:
-        st.info("No leads available.")
-    else:
-        df = compute_sla(df)
-        st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True)
 
 # =======================
 # REP DRAWER
 # =======================
 with tabs[1]:
     if not st.session_state.rep_name:
-        st.subheader("Start Session")
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
         pwd = st.text_input("Password", type="password")
 
         if st.button("Start Session"):
             if REP_PASSWORDS.get(name) == pwd:
                 st.session_state.rep_name = name
-                st.success(f"Logged in as {name}")
                 st.rerun()
             else:
                 st.error("Invalid password")
@@ -137,53 +77,30 @@ with tabs[1]:
         st.success(f"Logged in as {st.session_state.rep_name}")
 
         df = load_leads(sheet)
-        df = compute_sla(df)
 
         cols = st.columns(3)
 
-        for idx, row in df.iterrows():
-            col = cols[idx % 3]
-
-            phone = str(row.get("phone", "")).strip()
-            intent = row.get("intent_band", "")
-            sla = row.get("sla_status", "")
-            picked = bool(row.get("picked"))
+        for i, row in df.iterrows():
+            col = cols[i % 3]
+            phone = str(row.get("phone"))
+            picked = row.get("picked")
             picked_by = row.get("picked_by")
-
-            intent_class = (
-                "intent-high" if intent == "High"
-                else "intent-medium" if intent == "Medium"
-                else "intent-low"
-            )
-
-            card_class = "lead-card picked" if picked else "lead-card"
 
             with col:
                 st.markdown(f"""
-                <div class="{card_class}">
-                    <div><strong>📱 {phone}</strong></div>
-                    <div class="{intent_class}">🧠 {intent} Intent</div>
-                    <div class="small">🚦 {sla}</div>
-                    <div class="small">⏱ Age: {row.get("lead_age_days")} days</div>
-                    <hr style="border-color:#1f2937">
-                    <div class="small">📍 City: {row.get("Customer City","-")}</div>
+                <div style="padding:16px;border-radius:12px;
+                background:#0f172a;opacity:{0.5 if picked else 1}">
+                <b>📱 {phone}</b><br>
+                Intent: {row.get("intent_band")}<br>
                 </div>
                 """, unsafe_allow_html=True)
 
                 if picked:
-                    st.markdown(
-                        f"<div class='locked'>🔒 Picked by {picked_by}</div>",
-                        unsafe_allow_html=True
-                    )
+                    st.error(f"🔒 Picked by {picked_by}")
                 else:
-                    if st.button(
-                        "✅ Pick Lead",
-                        key=f"pick_{idx}_{phone}"
-                    ):
+                    if st.button("✅ Pick Lead", key=f"pick_{i}_{phone}"):
                         success, msg = atomic_pick(
-                            sheet=sheet,
-                            phone=phone,
-                            rep_name=st.session_state.rep_name
+                            sheet, phone, st.session_state.rep_name
                         )
                         if success:
                             st.success("Lead picked")
@@ -196,21 +113,19 @@ with tabs[1]:
 # =======================
 with tabs[2]:
     if not st.session_state.admin_ok:
-        admin_pwd = st.text_input("Admin Password", type="password")
+        pwd = st.text_input("Admin Password", type="password")
         if st.button("Unlock Admin"):
-            if admin_pwd == ADMIN_PASSWORD:
+            if pwd == ADMIN_PASSWORD:
                 st.session_state.admin_ok = True
-                st.success("Admin unlocked")
+                st.rerun()
             else:
                 st.error("Wrong password")
     else:
         uploaded = st.file_uploader("Upload Refrens CSV", type=["csv"])
         if uploaded:
             df = pd.read_csv(uploaded)
-            st.dataframe(df.head())
-
             if st.button("Run Scoring + Update"):
                 scored = score_leads(df)
                 scored["last_refresh"] = datetime.now(timezone.utc).isoformat()
-                upsert_leads(sheet, scored, lead_key="phone")
-                st.success("Sheet updated successfully")
+                upsert_leads(sheet, scored)
+                st.success("Updated")
