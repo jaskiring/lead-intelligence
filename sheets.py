@@ -1,7 +1,6 @@
 import pandas as pd
 from datetime import datetime, timezone
 
-
 INTERNAL_COLUMNS = [
     "phone",
     "name",
@@ -23,13 +22,17 @@ INTERNAL_COLUMNS = [
 
 
 def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
-    """Map Refrens CSV → internal schema"""
+    # 🔴 HARD FAIL if Phone column is missing
+    if "Phone" not in df.columns:
+        raise ValueError(
+            "CSV must contain a column named exactly 'Phone'"
+        )
 
     mapped = pd.DataFrame()
 
+    # ✅ CORRECT MAPPING
     mapped["phone"] = (
-        df.get("Phone")
-        .fillna(df.get("phone_number"))
+        df["Phone"]
         .astype(str)
         .str.strip()
     )
@@ -44,7 +47,9 @@ def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
         "when_would_you_prefer_to_undergo_the_lasik_treatment?"
     )
 
-    mapped["city"] = df.get("which_city_would_you_prefer_for_treatment_")
+    mapped["city"] = df.get(
+        "which_city_would_you_prefer_for_treatment_"
+    )
 
     mapped["objection_type"] = df.get("Objection Type")
     mapped["call_outcome"] = df.get("Call Outcome")
@@ -62,15 +67,14 @@ def load_leads(sheet):
 
 
 def upsert_leads(sheet, df: pd.DataFrame):
+    df = df.reindex(columns=INTERNAL_COLUMNS)
+
     existing = load_leads(sheet)
 
     if existing.empty:
         sheet.update(
             [INTERNAL_COLUMNS]
-            + df.reindex(columns=INTERNAL_COLUMNS)
-            .fillna("")
-            .astype(str)
-            .values.tolist()
+            + df.fillna("").astype(str).values.tolist()
         )
         return
 
@@ -98,19 +102,15 @@ def atomic_pick(sheet, phone: str, rep_name: str):
     if phone not in df["phone"].astype(str).values:
         return False, "Lead not found"
 
-    row_idx = df.index[df["phone"].astype(str) == phone][0] + 2
+    idx = df.index[df["phone"].astype(str) == phone][0] + 2
 
-    if str(df.loc[row_idx - 2, "picked"]).lower() == "true":
+    if str(df.loc[idx - 2, "picked"]).lower() == "true":
         return False, "Already picked"
 
     now = datetime.now(timezone.utc).isoformat()
 
-    sheet.update_cell(row_idx, INTERNAL_COLUMNS.index("picked") + 1, "TRUE")
-    sheet.update_cell(
-        row_idx, INTERNAL_COLUMNS.index("picked_by") + 1, rep_name
-    )
-    sheet.update_cell(
-        row_idx, INTERNAL_COLUMNS.index("picked_at") + 1, now
-    )
+    sheet.update_cell(idx, INTERNAL_COLUMNS.index("picked") + 1, "TRUE")
+    sheet.update_cell(idx, INTERNAL_COLUMNS.index("picked_by") + 1, rep_name)
+    sheet.update_cell(idx, INTERNAL_COLUMNS.index("picked_at") + 1, now)
 
     return True, "Picked"
