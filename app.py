@@ -10,14 +10,18 @@ from sheets import (
     atomic_pick,
 )
 
-# ---------------- CONFIG
+# ======================================================
+# CONFIG
+# ======================================================
 WORKSHEET_NAME = "leads_master"
 SPREADSHEET_ID = "1JjcxzsJpf-s92-w_Mc10K3dL_SewejThMLzj4O-7pbs"
 
 ADMIN_PASSWORD = st.secrets["auth"]["admin_password"]
 REP_PASSWORDS = st.secrets["auth"]["reps"]
 
-# ---------------- GOOGLE SHEET
+# ======================================================
+# GOOGLE SHEET
+# ======================================================
 @st.cache_resource
 def get_sheet():
     from google.oauth2.service_account import Credentials
@@ -35,25 +39,61 @@ def get_sheet():
 
 sheet = get_sheet()
 
-# ---------------- SESSION
+# ======================================================
+# SESSION
+# ======================================================
 st.session_state.setdefault("rep", None)
 st.session_state.setdefault("admin", False)
 
-# ---------------- UI
-st.set_page_config("Lead Intelligence Portal", layout="wide")
+# ======================================================
+# SLA LOGIC
+# ======================================================
+def compute_sla(row):
+    last_refresh = row.get("last_refresh")
+    if not last_refresh:
+        return "", "⚪ No SLA"
+
+    try:
+        last = datetime.fromisoformat(last_refresh)
+        age_days = (datetime.now(timezone.utc) - last).days
+    except Exception:
+        return "", "⚪ No SLA"
+
+    intent = row.get("intent_band")
+
+    if intent == "High":
+        if age_days <= 7:
+            return age_days, "🟢 Within SLA"
+        elif age_days <= 10:
+            return age_days, "🟡 At Risk"
+        else:
+            return age_days, "🔴 Breached"
+
+    if intent == "Medium":
+        if age_days <= 14:
+            return age_days, "🟢 Within SLA"
+        else:
+            return age_days, "🟡 At Risk"
+
+    return age_days, "⚪ No SLA"
+
+# ======================================================
+# UI
+# ======================================================
+st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
 st.title("🧠 Lead Intelligence Portal")
 
 tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 
 # ======================================================
-# DASHBOARD (TABLE VIEW)
+# DASHBOARD (TABLE)
 # ======================================================
 with tabs[0]:
     df = load_leads(sheet)
     st.dataframe(df, use_container_width=True)
 
 # ======================================================
-# REP DRAWER (RICH PROFILE CARDS)
+# REP DRAWER (TILE VIEW + SLA)
 # ======================================================
 with tabs[1]:
     if not st.session_state.rep:
@@ -82,6 +122,8 @@ with tabs[1]:
                     phone = row.get("phone", "")
                     picked = str(row.get("picked", "")).lower() == "true"
 
+                    age_days, sla_status = compute_sla(row)
+
                     # ---------- HEADER
                     st.markdown(
                         f"""
@@ -104,7 +146,17 @@ with tabs[1]:
 
                     st.divider()
 
-                    # ---------- CONVERSATION / STATUS
+                    # ---------- SLA
+                    st.markdown(
+                        f"""
+                        ⏱ **Lead Age**: {age_days} days  
+                        🚦 **SLA**: {sla_status}
+                        """
+                    )
+
+                    st.divider()
+
+                    # ---------- CONVERSATION
                     st.markdown(
                         f"""
                         📞 **Call Outcome**: {row.get("call_outcome", "")}  
@@ -116,7 +168,7 @@ with tabs[1]:
 
                     st.divider()
 
-                    # ---------- PICK / CONTROL
+                    # ---------- PICK
                     if picked:
                         st.error(
                             f"""
