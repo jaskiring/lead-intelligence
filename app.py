@@ -78,7 +78,7 @@ tabs = st.tabs([
 ])
 
 # ======================================================
-# CARD RENDERER (LOCKED)
+# CARD RENDERER
 # ======================================================
 def render_lead_card(row, allow_pick: bool):
     phone = row.get("phone", "")
@@ -121,7 +121,7 @@ def render_lead_card(row, allow_pick: bool):
                 st.error(msg)
 
 # ======================================================
-# REP DRAWER
+# REP DRAWER (ALL LEADS, PICKED OR NOT)
 # ======================================================
 with tabs[0]:
     if not st.session_state.rep:
@@ -138,14 +138,13 @@ with tabs[0]:
         st.success(f"Logged in as {st.session_state.rep}")
 
         df = load_leads(sheet)
-        available = df[df["picked"].astype(str).str.lower() != "true"]
 
-        if available.empty:
-            st.info("No available leads.")
+        if df.empty:
+            st.info("No leads available.")
         else:
             rows = [
-                available.iloc[i:i+3]
-                for i in range(0, len(available), 3)
+                df.iloc[i:i+3]
+                for i in range(0, len(df), 3)
             ]
 
             for group in rows:
@@ -155,7 +154,7 @@ with tabs[0]:
                         render_lead_card(row, allow_pick=True)
 
 # ======================================================
-# MY LEADS
+# MY LEADS (ONLY MY PICKS)
 # ======================================================
 with tabs[1]:
     if not st.session_state.rep:
