@@ -83,17 +83,22 @@ def compute_sla(row):
 st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
 st.title("🧠 Lead Intelligence Portal")
 
-tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
+tabs = st.tabs([
+    "📊 Dashboard",
+    "🧑‍💼 Rep Drawer",
+    "📂 My Leads",
+    "🔐 Admin"
+])
 
 # ======================================================
-# DASHBOARD (TABLE)
+# DASHBOARD
 # ======================================================
 with tabs[0]:
     df = load_leads(sheet)
     st.dataframe(df, use_container_width=True)
 
 # ======================================================
-# REP DRAWER (TILE VIEW + SLA)
+# REP DRAWER (ALL AVAILABLE LEADS)
 # ======================================================
 with tabs[1]:
     if not st.session_state.rep:
@@ -118,13 +123,10 @@ with tabs[1]:
 
             for idx, row in df.iterrows():
                 with cols[idx % 3]:
-
                     phone = row.get("phone", "")
                     picked = str(row.get("picked", "")).lower() == "true"
-
                     age_days, sla_status = compute_sla(row)
 
-                    # ---------- HEADER
                     st.markdown(
                         f"""
                         ### 📞 {phone}
@@ -135,7 +137,6 @@ with tabs[1]:
 
                     st.divider()
 
-                    # ---------- INTENT
                     st.markdown(
                         f"""
                         🔥 **Intent**: `{row.get("intent_band", "")}`  
@@ -146,7 +147,6 @@ with tabs[1]:
 
                     st.divider()
 
-                    # ---------- SLA
                     st.markdown(
                         f"""
                         ⏱ **Lead Age**: {age_days} days  
@@ -156,27 +156,8 @@ with tabs[1]:
 
                     st.divider()
 
-                    # ---------- CONVERSATION
-                    st.markdown(
-                        f"""
-                        📞 **Call Outcome**: {row.get("call_outcome", "")}  
-                        ❗ **Objection**: {row.get("objection_type", "")}  
-                        🩺 **Consultation**: {row.get("consultation_status", "")}  
-                        📌 **Status**: {row.get("status", "")}
-                        """
-                    )
-
-                    st.divider()
-
-                    # ---------- PICK
                     if picked:
-                        st.error(
-                            f"""
-                            🔒 **Picked**  
-                            👤 {row.get("picked_by", "")}  
-                            ⏱ {row.get("picked_at", "")}
-                            """
-                        )
+                        st.error(f"🔒 Picked by {row.get('picked_by', '')}")
                     else:
                         if st.button(
                             "✅ Pick Lead",
@@ -189,15 +170,55 @@ with tabs[1]:
                                 rep_name=st.session_state.rep,
                             )
                             if ok:
-                                st.success("Lead picked")
                                 st.rerun()
                             else:
                                 st.error(msg)
 
 # ======================================================
-# ADMIN
+# MY LEADS (PICKED BY ME)
 # ======================================================
 with tabs[2]:
+    if not st.session_state.rep:
+        st.info("Please login as a rep to view your leads.")
+    else:
+        df = load_leads(sheet)
+        my_leads = df[
+            (df["picked"].astype(str).str.lower() == "true")
+            & (df["picked_by"] == st.session_state.rep)
+        ]
+
+        if my_leads.empty:
+            st.info("You have not picked any leads yet.")
+        else:
+            cols = st.columns(2)
+
+            for idx, row in my_leads.iterrows():
+                with cols[idx % 2]:
+                    age_days, sla_status = compute_sla(row)
+
+                    st.markdown(
+                        f"""
+                        ### 📞 {row.get("phone", "")}
+                        🏙️ {row.get("city", "")}
+
+                        🔥 **Intent**: `{row.get("intent_band", "")}`  
+                        ⏱ **Lead Age**: {age_days} days  
+                        🚦 **SLA**: {sla_status}
+                        """
+                    )
+
+                    st.markdown(
+                        f"""
+                        🕒 **Timeline**: {row.get("timeline", "")}  
+                        📞 **Call Outcome**: {row.get("call_outcome", "")}  
+                        ❗ **Objection**: {row.get("objection_type", "")}
+                        """
+                    )
+
+# ======================================================
+# ADMIN
+# ======================================================
+with tabs[3]:
     if not st.session_state.admin:
         pwd = st.text_input("Admin Password", type="password")
         if st.button("Unlock Admin"):
@@ -217,6 +238,5 @@ with tabs[2]:
                 clean = normalize_refrens_csv(raw)
                 scored = score_leads(clean)
                 scored["last_refresh"] = datetime.now(timezone.utc).isoformat()
-
                 upsert_leads(sheet, scored)
                 st.success("Sheet updated correctly")
