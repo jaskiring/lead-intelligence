@@ -47,6 +47,59 @@ st.session_state.setdefault("rep", None)
 st.session_state.setdefault("admin", False)
 
 # ======================================================
+# SLA + SORTING
+# ======================================================
+def compute_sla(df: pd.DataFrame) -> pd.DataFrame:
+    if "last_refresh" not in df.columns:
+        df["lead_age_days"] = ""
+        df["sla_status"] = ""
+        return df
+
+    now = datetime.now(timezone.utc)
+
+    def age_days(ts):
+        try:
+            return (now - datetime.fromisoformat(ts)).days
+        except:
+            return ""
+
+    df["lead_age_days"] = df["last_refresh"].apply(age_days)
+
+    def sla(row):
+        if row.get("intent_band") == "High":
+            if row.get("lead_age_days", 0) >= 7:
+                return "URGENT"
+            return "WITHIN_SLA"
+        return ""
+
+    df["sla_status"] = df.apply(sla, axis=1)
+    return df
+
+
+def sort_for_rep_drawer(df: pd.DataFrame) -> pd.DataFrame:
+    priority = {
+        "URGENT": 0,
+        "WITHIN_SLA": 1,
+        "": 2,
+    }
+    intent_rank = {
+        "High": 0,
+        "Medium": 1,
+        "Low": 2,
+    }
+
+    df["_sla_rank"] = df["sla_status"].map(priority).fillna(3)
+    df["_intent_rank"] = df["intent_band"].map(intent_rank).fillna(3)
+
+    df = df.sort_values(
+        by=["_sla_rank", "_intent_rank", "intent_score"],
+        ascending=[True, True, False],
+    )
+
+    return df.drop(columns=["_sla_rank", "_intent_rank"], errors="ignore")
+
+
+# ======================================================
 # UI BASE
 # ======================================================
 st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
@@ -56,11 +109,25 @@ st.markdown(
     """
     <style>
     .card {
-        border-radius:10px;
-        padding:12px;
-        margin-bottom:14px;
+        border-radius:12px;
+        padding:14px;
+        margin-bottom:16px;
         background:#020617;
         border:1px solid #1e293b;
+    }
+    .badge-urgent {
+        background:#7f1d1d;
+        color:white;
+        padding:4px 8px;
+        border-radius:6px;
+        font-size:12px;
+    }
+    .badge-ok {
+        background:#064e3b;
+        color:white;
+        padding:4px 8px;
+        border-radius:6px;
+        font-size:12px;
     }
     .muted {
         color:#94a3b8;
@@ -78,15 +145,25 @@ tabs = st.tabs([
 ])
 
 # ======================================================
-# CARD RENDERER
+# CARD RENDERER (WITH SLA + ACTION)
 # ======================================================
 def render_lead_card(row, allow_pick: bool):
     phone = row.get("phone", "")
     picked = str(row.get("picked", "")).lower() == "true"
 
+    # SLA Badge
+    sla = row.get("sla_status", "")
+    if sla == "URGENT":
+        sla_badge = "<span class='badge-urgent'>🔴 URGENT – ACTION NEEDED</span>"
+    elif sla == "WITHIN_SLA":
+        sla_badge = "<span class='badge-ok'>🟢 Within SLA</span>"
+    else:
+        sla_badge = ""
+
     st.markdown(
         f"""
         <div class="card">
+        {sla_badge}<br><br>
         <b>📞 {phone}</b><br>
         <span class="muted">{row.get("name","")}</span><br><br>
 
@@ -102,6 +179,13 @@ def render_lead_card(row, allow_pick: bool):
         unsafe_allow_html=True,
     )
 
+    # Action Hint
+    if row.get("intent_band") == "High" and row.get("consultation_status") != "Done":
+        st.info(
+            "🧠 **Suggested action:** Reassurance + urgency (age, outcomes, consultation booking)"
+        )
+
+    # Pick Control
     if picked:
         st.error(f"🔒 Picked by {row.get('picked_by','')}")
     elif allow_pick:
@@ -121,7 +205,7 @@ def render_lead_card(row, allow_pick: bool):
                 st.error(msg)
 
 # ======================================================
-# REP DRAWER (ALL LEADS, PICKED OR NOT)
+# REP DRAWER (ALL LEADS, SORTED)
 # ======================================================
 with tabs[0]:
     if not st.session_state.rep:
@@ -138,15 +222,13 @@ with tabs[0]:
         st.success(f"Logged in as {st.session_state.rep}")
 
         df = load_leads(sheet)
+        df = compute_sla(df)
+        df = sort_for_rep_drawer(df)
 
         if df.empty:
             st.info("No leads available.")
         else:
-            rows = [
-                df.iloc[i:i+3]
-                for i in range(0, len(df), 3)
-            ]
-
+            rows = [df.iloc[i:i+3] for i in range(0, len(df), 3)]
             for group in rows:
                 cols = st.columns(3)
                 for col, (_, row) in zip(cols, group.iterrows()):
@@ -154,23 +236,20 @@ with tabs[0]:
                         render_lead_card(row, allow_pick=True)
 
 # ======================================================
-# MY LEADS (ONLY MY PICKS)
+# MY LEADS
 # ======================================================
 with tabs[1]:
     if not st.session_state.rep:
         st.info("Login to view your leads.")
     else:
         df = load_leads(sheet)
+        df = compute_sla(df)
         mine = df[df["picked_by"] == st.session_state.rep]
 
         if mine.empty:
             st.info("You haven’t picked any leads yet.")
         else:
-            rows = [
-                mine.iloc[i:i+3]
-                for i in range(0, len(mine), 3)
-            ]
-
+            rows = [mine.iloc[i:i+3] for i in range(0, len(mine), 3)]
             for group in rows:
                 cols = st.columns(3)
                 for col, (_, row) in zip(cols, group.iterrows()):
