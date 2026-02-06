@@ -51,37 +51,67 @@ st.session_state.setdefault("admin", False)
 def compute_sla(row):
     last_refresh = row.get("last_refresh")
     if not last_refresh:
-        return "", "⚪ No SLA"
+        return "", "⚪ No SLA", "sla-none"
 
     try:
         last = datetime.fromisoformat(last_refresh)
         age_days = (datetime.now(timezone.utc) - last).days
     except Exception:
-        return "", "⚪ No SLA"
+        return "", "⚪ No SLA", "sla-none"
 
     intent = row.get("intent_band")
 
     if intent == "High":
         if age_days <= 7:
-            return age_days, "🟢 Within SLA"
+            return age_days, "🟢 Within SLA", "sla-ok"
         elif age_days <= 10:
-            return age_days, "🟡 At Risk"
+            return age_days, "🟡 At Risk", "sla-risk"
         else:
-            return age_days, "🔴 Breached"
+            return age_days, "🔴 Breached", "sla-breach"
 
     if intent == "Medium":
         if age_days <= 14:
-            return age_days, "🟢 Within SLA"
+            return age_days, "🟢 Within SLA", "sla-ok"
         else:
-            return age_days, "🟡 At Risk"
+            return age_days, "🟡 At Risk", "sla-risk"
 
-    return age_days, "⚪ No SLA"
+    return age_days, "⚪ No SLA", "sla-none"
 
 # ======================================================
 # UI
 # ======================================================
 st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
 st.title("🧠 Lead Intelligence Portal")
+
+st.markdown(
+    """
+    <style>
+    .sla-ok {
+        background-color: #0f172a;
+        border-radius: 12px;
+        padding: 14px;
+    }
+    .sla-risk {
+        background-color: #3a2f00;
+        border: 2px solid #facc15;
+        border-radius: 12px;
+        padding: 14px;
+    }
+    .sla-breach {
+        background-color: #3a0f0f;
+        border: 2px solid #ef4444;
+        border-radius: 12px;
+        padding: 14px;
+    }
+    .sla-none {
+        background-color: #020617;
+        border-radius: 12px;
+        padding: 14px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 tabs = st.tabs([
     "📊 Dashboard",
@@ -98,13 +128,12 @@ with tabs[0]:
     st.dataframe(df, use_container_width=True)
 
 # ======================================================
-# REP DRAWER (ALL AVAILABLE LEADS)
+# REP DRAWER
 # ======================================================
 with tabs[1]:
     if not st.session_state.rep:
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
         pwd = st.text_input("Password", type="password")
-
         if st.button("Login"):
             if REP_PASSWORDS.get(name) == pwd:
                 st.session_state.rep = name
@@ -125,49 +154,40 @@ with tabs[1]:
                 with cols[idx % 3]:
                     phone = row.get("phone", "")
                     picked = str(row.get("picked", "")).lower() == "true"
-                    age_days, sla_status = compute_sla(row)
+
+                    age_days, sla_status, sla_class = compute_sla(row)
 
                     st.markdown(
                         f"""
-                        ### 📞 {phone}
-                        **{row.get("name", "")}**  
-                        🏙️ {row.get("city", "")}
+                        <div class="{sla_class}">
+                        <h4>📞 {phone}</h4>
+                        <b>{row.get("name","")}</b><br>
+                        🏙 {row.get("city","")}<br><br>
+
+                        🔥 Intent: <b>{row.get("intent_band","")}</b><br>
+                        📊 Score: {row.get("intent_score","")}<br>
+                        🕒 Timeline: {row.get("timeline","")}<br><br>
+
+                        ⏱ Age: {age_days} days<br>
+                        🚦 SLA: <b>{sla_status}</b><br><br>
                         """
+                        + (
+                            f"<b style='color:#ef4444'>🔒 Picked by {row.get('picked_by','')}</b>"
+                            if picked
+                            else ""
+                        )
+                        + "</div>",
+                        unsafe_allow_html=True,
                     )
 
-                    st.divider()
-
-                    st.markdown(
-                        f"""
-                        🔥 **Intent**: `{row.get("intent_band", "")}`  
-                        📊 **Score**: {row.get("intent_score", "")}  
-                        🕒 **Timeline**: {row.get("timeline", "")}
-                        """
-                    )
-
-                    st.divider()
-
-                    st.markdown(
-                        f"""
-                        ⏱ **Lead Age**: {age_days} days  
-                        🚦 **SLA**: {sla_status}
-                        """
-                    )
-
-                    st.divider()
-
-                    if picked:
-                        st.error(f"🔒 Picked by {row.get('picked_by', '')}")
-                    else:
+                    if not picked:
                         if st.button(
                             "✅ Pick Lead",
                             key=f"pick_{idx}_{phone}",
                             use_container_width=True,
                         ):
                             ok, msg = atomic_pick(
-                                sheet,
-                                phone=phone,
-                                rep_name=st.session_state.rep,
+                                sheet, phone, st.session_state.rep
                             )
                             if ok:
                                 st.rerun()
@@ -175,11 +195,11 @@ with tabs[1]:
                                 st.error(msg)
 
 # ======================================================
-# MY LEADS (PICKED BY ME)
+# MY LEADS
 # ======================================================
 with tabs[2]:
     if not st.session_state.rep:
-        st.info("Please login as a rep to view your leads.")
+        st.info("Login to see your leads.")
     else:
         df = load_leads(sheet)
         my_leads = df[
@@ -188,31 +208,24 @@ with tabs[2]:
         ]
 
         if my_leads.empty:
-            st.info("You have not picked any leads yet.")
+            st.info("No picked leads yet.")
         else:
             cols = st.columns(2)
-
             for idx, row in my_leads.iterrows():
                 with cols[idx % 2]:
-                    age_days, sla_status = compute_sla(row)
+                    age_days, sla_status, sla_class = compute_sla(row)
 
                     st.markdown(
                         f"""
-                        ### 📞 {row.get("phone", "")}
-                        🏙️ {row.get("city", "")}
-
-                        🔥 **Intent**: `{row.get("intent_band", "")}`  
-                        ⏱ **Lead Age**: {age_days} days  
-                        🚦 **SLA**: {sla_status}
-                        """
-                    )
-
-                    st.markdown(
-                        f"""
-                        🕒 **Timeline**: {row.get("timeline", "")}  
-                        📞 **Call Outcome**: {row.get("call_outcome", "")}  
-                        ❗ **Objection**: {row.get("objection_type", "")}
-                        """
+                        <div class="{sla_class}">
+                        <h4>📞 {row.get("phone","")}</h4>
+                        🏙 {row.get("city","")}<br><br>
+                        🔥 {row.get("intent_band","")}<br>
+                        ⏱ {age_days} days<br>
+                        🚦 {sla_status}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
                     )
 
 # ======================================================
@@ -229,7 +242,6 @@ with tabs[3]:
                 st.error("Wrong password")
     else:
         file = st.file_uploader("Upload Refrens CSV", type="csv")
-
         if file:
             raw = pd.read_csv(file)
             st.dataframe(raw.head())
