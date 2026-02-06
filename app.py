@@ -66,15 +66,41 @@ def compute_sla(df):
     def sla(row):
         if row.get("intent_band") == "High":
             return "🔴 Urgent" if row.get("lead_age_days", 0) >= 7 else "🟢 Within SLA"
-        return ""
+        return "⚪ Normal"
 
     df["sla_status"] = df.apply(sla, axis=1)
     return df
 
 # -----------------------
-# UI
+# PAGE CONFIG
 # -----------------------
-st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
+st.set_page_config(
+    page_title="Lead Intelligence Portal",
+    layout="wide",
+)
+
+# -----------------------
+# CUSTOM CSS (UI POLISH)
+# -----------------------
+st.markdown("""
+<style>
+.lead-card {
+    border-radius: 14px;
+    padding: 16px;
+    background: #111827;
+    border: 1px solid #1f2937;
+    margin-bottom: 16px;
+}
+.intent-high { color: #f87171; font-weight: 700; }
+.intent-medium { color: #facc15; font-weight: 700; }
+.intent-low { color: #34d399; font-weight: 700; }
+.small { font-size: 0.85rem; color: #9ca3af; }
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------
+# HEADER
+# -----------------------
 st.title("🧠 Lead Intelligence Portal")
 
 tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
@@ -91,17 +117,19 @@ with tabs[0]:
         st.dataframe(df, use_container_width=True)
 
 # =======================
-# REP DRAWER
+# REP DRAWER (TILES)
 # =======================
 with tabs[1]:
     if not st.session_state.rep_name:
+        st.subheader("Start Your Session")
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
         pwd = st.text_input("Password", type="password")
 
         if st.button("Start Session"):
             if REP_PASSWORDS.get(name) == pwd:
                 st.session_state.rep_name = name
-                st.success(f"Logged in as {name}")
+                st.success(f"Welcome {name}")
+                st.rerun()
             else:
                 st.error("Invalid password")
     else:
@@ -115,20 +143,37 @@ with tabs[1]:
         if available.empty:
             st.info("No leads available.")
         else:
+            cols = st.columns(3)
+
             for idx, row in available.iterrows():
+                col = cols[idx % 3]
                 phone = str(row.get("phone", "")).strip()
+                intent = row.get("intent_band", "")
+                sla = row.get("sla_status", "")
 
-                with st.expander(
-                    f"{phone} | {row.get('intent_band')} | {row.get('sla_status')}"
-                ):
-                    st.write(f"Intent Score: {row.get('intent_score')}")
-                    st.write(f"Lead State: {row.get('lead_state')}")
-                    st.write(f"Age (days): {row.get('lead_age_days')}")
+                intent_class = (
+                    "intent-high" if intent == "High"
+                    else "intent-medium" if intent == "Medium"
+                    else "intent-low"
+                )
 
-                    # ✅ ABSOLUTELY UNIQUE KEY
-                    button_key = f"pick_{idx}_{phone}"
+                with col:
+                    st.markdown(f"""
+                    <div class="lead-card">
+                        <div><strong>📱 {phone}</strong></div>
+                        <div class="{intent_class}">🧠 {intent} Intent</div>
+                        <div class="small">🚦 {sla}</div>
+                        <div class="small">⏱ Age: {row.get("lead_age_days")} days</div>
+                        <hr style="border-color:#1f2937">
+                        <div class="small">📍 City: {row.get("Customer City","-")}</div>
+                        <div class="small">📅 Timeline: {row.get("when_would_you_prefer_to_undergo_the_lasik_treatment?","-")}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                    if st.button("Pick Lead", key=button_key):
+                    if st.button(
+                        "✅ Pick Lead",
+                        key=f"pick_{idx}_{phone}"
+                    ):
                         success, msg = atomic_pick(
                             sheet=sheet,
                             phone=phone,
@@ -136,7 +181,7 @@ with tabs[1]:
                         )
 
                         if success:
-                            st.success("Lead picked successfully")
+                            st.success("Lead picked")
                             st.rerun()
                         else:
                             st.error(msg)
