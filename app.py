@@ -2,22 +2,26 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 
-from scoring import score_leads
 from sheets import (
     normalize_refrens_csv,
     load_leads,
     upsert_leads,
     atomic_pick,
 )
+from scoring import score_leads
 
-# ---------------- CONFIG
-WORKSHEET_NAME = "leads_master"
+# ======================================================
+# CONFIG
+# ======================================================
 SPREADSHEET_ID = "1JjcxzsJpf-s92-w_Mc10K3dL_SewejThMLzj4O-7pbs"
+WORKSHEET_NAME = "leads_master"
 
 ADMIN_PASSWORD = st.secrets["auth"]["admin_password"]
 REP_PASSWORDS = st.secrets["auth"]["reps"]
 
-# ---------------- GOOGLE SHEET
+# ======================================================
+# GOOGLE SHEET
+# ======================================================
 @st.cache_resource
 def get_sheet():
     from google.oauth2.service_account import Credentials
@@ -36,44 +40,70 @@ def get_sheet():
 
 sheet = get_sheet()
 
-# ---------------- SESSION
+# ======================================================
+# SESSION
+# ======================================================
 st.session_state.setdefault("rep", None)
 st.session_state.setdefault("admin", False)
 
-# ---------------- UI
-st.set_page_config("Lead Intelligence Portal", layout="wide")
+# ======================================================
+# UI BASE
+# ======================================================
+st.set_page_config(page_title="Lead Intelligence Portal", layout="wide")
 st.title("🧠 Lead Intelligence Portal")
 
-tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "📁 My Leads", "🔐 Admin"])
+st.markdown(
+    """
+    <style>
+    .card {
+        border-radius:10px;
+        padding:12px;
+        margin-bottom:14px;
+        background:#020617;
+        border:1px solid #1e293b;
+    }
+    .muted {
+        color:#94a3b8;
+        font-size:12px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+tabs = st.tabs([
+    "🧑‍💼 Rep Drawer",
+    "📁 My Leads",
+    "🔐 Admin",
+])
 
 # ======================================================
-# DASHBOARD (TABLE)
+# CARD RENDERER (LOCKED)
 # ======================================================
-with tabs[0]:
-    df = load_leads(sheet)
-    st.dataframe(df, use_container_width=True)
-
-# ======================================================
-# HELPER: CARD RENDERER
-# ======================================================
-def render_lead_card(row, allow_pick=True):
+def render_lead_card(row, allow_pick: bool):
     phone = row.get("phone", "")
     picked = str(row.get("picked", "")).lower() == "true"
 
-    st.markdown(f"### 📞 {phone}")
-    st.caption(row.get("name", ""))
-    st.markdown(f"🏙️ **City:** {row.get('city', '')}")
-    st.markdown(f"🔥 **Intent:** {row.get('intent_band', '')} ({row.get('intent_score', '')})")
-    st.markdown(f"🕒 **Timeline:** {row.get('timeline', '')}")
-    st.markdown(f"❗ **Objection:** {row.get('objection_type', '')}")
-    st.markdown(f"📞 **Call Outcome:** {row.get('call_outcome', '')}")
-    st.markdown(f"🩺 **Consultation:** {row.get('consultation_status', '')}")
-    st.markdown(f"📌 **Status:** {row.get('status', '')}")
+    st.markdown(
+        f"""
+        <div class="card">
+        <b>📞 {phone}</b><br>
+        <span class="muted">{row.get("name","")}</span><br><br>
 
-    st.divider()
+        🏙 <b>City:</b> {row.get("city","")}<br>
+        🔥 <b>Intent:</b> {row.get("intent_band","")} ({row.get("intent_score","")})<br>
+        🕒 <b>Timeline:</b> {row.get("timeline","")}<br>
+        🩺 <b>Consultation:</b> {row.get("consultation_status","")}<br>
+        ❗ <b>Objection:</b> {row.get("objection_type","")}<br>
+        📞 <b>Call Outcome:</b> {row.get("call_outcome","")}<br>
+        📌 <b>Status:</b> {row.get("status","")}<br>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if picked:
-        st.error(f"🔒 Picked by {row.get('picked_by', '')}")
+        st.error(f"🔒 Picked by {row.get('picked_by','')}")
     elif allow_pick:
         if st.button(
             "✅ Pick Lead",
@@ -91,9 +121,9 @@ def render_lead_card(row, allow_pick=True):
                 st.error(msg)
 
 # ======================================================
-# REP DRAWER (FIXED GRID)
+# REP DRAWER
 # ======================================================
-with tabs[1]:
+with tabs[0]:
     if not st.session_state.rep:
         name = st.selectbox("Your Name", list(REP_PASSWORDS.keys()))
         pwd = st.text_input("Password", type="password")
@@ -108,12 +138,15 @@ with tabs[1]:
         st.success(f"Logged in as {st.session_state.rep}")
 
         df = load_leads(sheet)
-        available = df[(df["picked"] != "TRUE") & (df["picked"] != True)]
+        available = df[df["picked"].astype(str).str.lower() != "true"]
 
         if available.empty:
             st.info("No available leads.")
         else:
-            rows = [available.iloc[i:i+3] for i in range(0, len(available), 3)]
+            rows = [
+                available.iloc[i:i+3]
+                for i in range(0, len(available), 3)
+            ]
 
             for group in rows:
                 cols = st.columns(3)
@@ -122,11 +155,11 @@ with tabs[1]:
                         render_lead_card(row, allow_pick=True)
 
 # ======================================================
-# MY LEADS (FIXED GRID)
+# MY LEADS
 # ======================================================
-with tabs[2]:
+with tabs[1]:
     if not st.session_state.rep:
-        st.info("Login as a rep to view your leads.")
+        st.info("Login to view your leads.")
     else:
         df = load_leads(sheet)
         mine = df[df["picked_by"] == st.session_state.rep]
@@ -134,7 +167,10 @@ with tabs[2]:
         if mine.empty:
             st.info("You haven’t picked any leads yet.")
         else:
-            rows = [mine.iloc[i:i+3] for i in range(0, len(mine), 3)]
+            rows = [
+                mine.iloc[i:i+3]
+                for i in range(0, len(mine), 3)
+            ]
 
             for group in rows:
                 cols = st.columns(3)
@@ -145,7 +181,7 @@ with tabs[2]:
 # ======================================================
 # ADMIN
 # ======================================================
-with tabs[3]:
+with tabs[2]:
     if not st.session_state.admin:
         pwd = st.text_input("Admin Password", type="password")
         if st.button("Unlock Admin"):

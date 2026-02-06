@@ -1,12 +1,9 @@
 import pandas as pd
 from datetime import datetime, timezone
-import logging
 
-# ---------------- LOGGING
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
-
-# ---------------- SCHEMA
+# ======================================================
+# CANONICAL INTERNAL SCHEMA (ORDER MATTERS)
+# ======================================================
 INTERNAL_COLUMNS = [
     "phone",
     "name",
@@ -26,35 +23,36 @@ INTERNAL_COLUMNS = [
     "last_refresh",
 ]
 
-# Fields that admin upload MUST NOT overwrite
+# Fields that MUST NOT be overwritten by admin upload
 PROTECTED_FIELDS = {"picked", "picked_by", "picked_at"}
 
 # ======================================================
 # HELPERS
 # ======================================================
-def _safe(val):
+def normalize_phone(val) -> str:
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return "".join(ch for ch in s if ch.isdigit())
+
+
+def safe(val):
     if pd.isna(val):
         return ""
     return str(val)
 
 
-def normalize_phone(phone: str) -> str:
-    if not phone:
-        return ""
-    phone = str(phone).strip()
-    if phone.endswith(".0"):
-        phone = phone[:-2]
-    return "".join(ch for ch in phone if ch.isdigit())
-
-
 # ======================================================
-# NORMALIZE REFRENS CSV
+# NORMALIZE REFRENS CSV → INTERNAL FORMAT
 # ======================================================
 def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
     if "Phone" not in df.columns:
-        raise ValueError("CSV must contain column 'Phone'")
+        raise ValueError("Refrens CSV must contain column: Phone")
 
     out = pd.DataFrame()
+
     out["phone"] = df["Phone"].apply(normalize_phone)
     out["name"] = df.get("Contact Name", "")
     out["reason"] = df.get(
@@ -63,21 +61,21 @@ def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
     out["timeline"] = df.get(
         "when_would_you_prefer_to_undergo_the_lasik_treatment?", ""
     )
-    out["city"] = df.get(
-        "which_city_would_you_prefer_for_treatment_", ""
-    )
+    out["city"] = df.get("which_city_would_you_prefer_for_treatment_", "")
     out["objection_type"] = df.get("Objection Type", "")
     out["call_outcome"] = df.get("Call Outcome", "")
     out["consultation_status"] = df.get("Consultation Status", "")
     out["status"] = df.get("Status", "")
+
     return out
 
 
 # ======================================================
-# LOAD LEADS (WITH ROW INDEX)
+# LOAD LEADS FROM SHEET (WITH ROW INDEX)
 # ======================================================
 def load_leads(sheet):
     rows = sheet.get_all_values()
+
     if len(rows) <= 1:
         return pd.DataFrame(columns=INTERNAL_COLUMNS + ["_row"])
 
@@ -85,52 +83,68 @@ def load_leads(sheet):
     data = rows[1:]
 
     df = pd.DataFrame(data, columns=header)
+
+    if "phone" not in df.columns:
+        raise RuntimeError("Sheet is missing required column: phone")
+
     df["phone"] = df["phone"].apply(normalize_phone)
-    df["_row"] = df.index + 2
+    df["_row"] = df.index + 2  # actual Google Sheet row number
+
     return df
 
 
 # ======================================================
-# UPSERT LEADS (SAFE)
+# UPSERT (SAFE MERGE, NEVER RESET)
 # ======================================================
 def upsert_leads(sheet, df: pd.DataFrame):
+    df = df.copy()
     df.columns = [c.strip().lower() for c in df.columns]
+
+    if "phone" not in df.columns:
+        raise ValueError("Incoming data missing phone column")
+
     df["phone"] = df["phone"].apply(normalize_phone)
+    df = df.reindex(columns=INTERNAL_COLUMNS)
+    df = df.applymap(safe)
 
     existing = load_leads(sheet)
 
+    # First ever write
     if existing.empty:
-        sheet.update([INTERNAL_COLUMNS] + df.reindex(columns=INTERNAL_COLUMNS).fillna("").values.tolist())
+        sheet.update([INTERNAL_COLUMNS] + df.values.tolist())
         return
 
+    existing = existing.applymap(safe)
     existing.set_index("phone", inplace=True)
     df.set_index("phone", inplace=True)
 
     for phone, row in df.iterrows():
+        if not phone:
+            continue
+
         if phone in existing.index:
             row_idx = int(existing.loc[phone, "_row"])
 
             for col in INTERNAL_COLUMNS:
                 if col in PROTECTED_FIELDS:
-                    continue  # 🔒 never overwrite ownership
+                    continue  # NEVER overwrite pick state
 
-                val = _safe(row.get(col))
+                val = safe(row.get(col))
                 col_idx = INTERNAL_COLUMNS.index(col) + 1
                 sheet.update_cell(row_idx, col_idx, val)
-
         else:
-            # New lead → safe defaults
+            # New lead
             new_row = []
             for col in INTERNAL_COLUMNS:
                 if col in PROTECTED_FIELDS:
                     new_row.append("")
                 else:
-                    new_row.append(_safe(row.get(col)))
+                    new_row.append(safe(row.get(col)))
             sheet.append_row(new_row)
 
 
 # ======================================================
-# ATOMIC PICK (LOCK SAFE)
+# ATOMIC PICK (LOCK ROW SAFELY)
 # ======================================================
 def atomic_pick(sheet, phone: str, rep_name: str):
     phone = normalize_phone(phone)
