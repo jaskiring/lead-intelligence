@@ -21,42 +21,36 @@ INTERNAL_COLUMNS = [
 ]
 
 
+def _safe(val):
+    """Convert ANY value to a safe string for Google Sheets"""
+    if pd.isna(val):
+        return ""
+    return str(val)
+
+
 def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
-    # 🔴 HARD FAIL if Phone column is missing
     if "Phone" not in df.columns:
-        raise ValueError(
-            "CSV must contain a column named exactly 'Phone'"
-        )
+        raise ValueError("CSV must contain column 'Phone'")
 
-    mapped = pd.DataFrame()
+    out = pd.DataFrame()
 
-    # ✅ CORRECT MAPPING
-    mapped["phone"] = (
-        df["Phone"]
-        .astype(str)
-        .str.strip()
+    out["phone"] = df["Phone"].astype(str).str.strip()
+    out["name"] = df.get("Contact Name", "")
+    out["reason"] = df.get(
+        "what_is_the_main_reason_you're_considering_lasik_surgery?", ""
     )
-
-    mapped["name"] = df.get("Contact Name", "")
-
-    mapped["reason"] = df.get(
-        "what_is_the_main_reason_you're_considering_lasik_surgery?"
+    out["timeline"] = df.get(
+        "when_would_you_prefer_to_undergo_the_lasik_treatment?", ""
     )
-
-    mapped["timeline"] = df.get(
-        "when_would_you_prefer_to_undergo_the_lasik_treatment?"
+    out["city"] = df.get(
+        "which_city_would_you_prefer_for_treatment_", ""
     )
+    out["objection_type"] = df.get("Objection Type", "")
+    out["call_outcome"] = df.get("Call Outcome", "")
+    out["consultation_status"] = df.get("Consultation Status", "")
+    out["status"] = df.get("Status", "")
 
-    mapped["city"] = df.get(
-        "which_city_would_you_prefer_for_treatment_"
-    )
-
-    mapped["objection_type"] = df.get("Objection Type")
-    mapped["call_outcome"] = df.get("Call Outcome")
-    mapped["consultation_status"] = df.get("Consultation Status")
-    mapped["status"] = df.get("Status")
-
-    return mapped
+    return out
 
 
 def load_leads(sheet):
@@ -69,48 +63,49 @@ def load_leads(sheet):
 def upsert_leads(sheet, df: pd.DataFrame):
     df = df.reindex(columns=INTERNAL_COLUMNS)
 
+    # 🔴 SANITIZE EVERYTHING
+    df = df.applymap(_safe)
+
     existing = load_leads(sheet)
 
     if existing.empty:
         sheet.update(
-            [INTERNAL_COLUMNS]
-            + df.fillna("").astype(str).values.tolist()
+            [INTERNAL_COLUMNS] + df.values.tolist()
         )
         return
 
+    existing = existing.applymap(_safe)
     existing.set_index("phone", inplace=True)
     df.set_index("phone", inplace=True)
 
     for phone, row in df.iterrows():
+        row_values = [_safe(row.get(col)) for col in INTERNAL_COLUMNS]
+
         if phone in existing.index:
             row_idx = existing.index.get_loc(phone) + 2
-            for col in INTERNAL_COLUMNS:
-                sheet.update_cell(
-                    row_idx,
-                    INTERNAL_COLUMNS.index(col) + 1,
-                    str(row.get(col, "")),
-                )
+            for col_idx, val in enumerate(row_values, start=1):
+                sheet.update_cell(row_idx, col_idx, val)
         else:
-            sheet.append_row(
-                [row.get(col, "") for col in INTERNAL_COLUMNS]
-            )
+            sheet.append_row(row_values)
 
 
 def atomic_pick(sheet, phone: str, rep_name: str):
     df = load_leads(sheet)
 
-    if phone not in df["phone"].astype(str).values:
+    df["phone"] = df["phone"].astype(str)
+
+    if phone not in df["phone"].values:
         return False, "Lead not found"
 
-    idx = df.index[df["phone"].astype(str) == phone][0] + 2
+    row_idx = df.index[df["phone"] == phone][0] + 2
 
-    if str(df.loc[idx - 2, "picked"]).lower() == "true":
+    if str(df.loc[row_idx - 2, "picked"]).lower() == "true":
         return False, "Already picked"
 
     now = datetime.now(timezone.utc).isoformat()
 
-    sheet.update_cell(idx, INTERNAL_COLUMNS.index("picked") + 1, "TRUE")
-    sheet.update_cell(idx, INTERNAL_COLUMNS.index("picked_by") + 1, rep_name)
-    sheet.update_cell(idx, INTERNAL_COLUMNS.index("picked_at") + 1, now)
+    sheet.update_cell(row_idx, INTERNAL_COLUMNS.index("picked") + 1, "TRUE")
+    sheet.update_cell(row_idx, INTERNAL_COLUMNS.index("picked_by") + 1, rep_name)
+    sheet.update_cell(row_idx, INTERNAL_COLUMNS.index("picked_at") + 1, now)
 
     return True, "Picked"
