@@ -3,10 +3,7 @@ from datetime import datetime, timezone
 import logging
 
 # ---------------- LOGGING
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 # ---------------- SCHEMA
@@ -29,6 +26,8 @@ INTERNAL_COLUMNS = [
     "last_refresh",
 ]
 
+# Fields that admin upload MUST NOT overwrite
+PROTECTED_FIELDS = {"picked", "picked_by", "picked_at"}
 
 # ======================================================
 # HELPERS
@@ -39,17 +38,13 @@ def _safe(val):
     return str(val)
 
 
-def normalize_phone(phone) -> str:
-    if phone is None:
+def normalize_phone(phone: str) -> str:
+    if not phone:
         return ""
-
     phone = str(phone).strip()
-
     if phone.endswith(".0"):
         phone = phone[:-2]
-
-    phone = "".join(ch for ch in phone if ch.isdigit())
-    return phone
+    return "".join(ch for ch in phone if ch.isdigit())
 
 
 # ======================================================
@@ -60,7 +55,6 @@ def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("CSV must contain column 'Phone'")
 
     out = pd.DataFrame()
-
     out["phone"] = df["Phone"].apply(normalize_phone)
     out["name"] = df.get("Contact Name", "")
     out["reason"] = df.get(
@@ -76,16 +70,14 @@ def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
     out["call_outcome"] = df.get("Call Outcome", "")
     out["consultation_status"] = df.get("Consultation Status", "")
     out["status"] = df.get("Status", "")
-
     return out
 
 
 # ======================================================
-# LOAD LEADS (WITH SHEET ROW NUMBER)
+# LOAD LEADS (WITH ROW INDEX)
 # ======================================================
 def load_leads(sheet):
     rows = sheet.get_all_values()
-
     if len(rows) <= 1:
         return pd.DataFrame(columns=INTERNAL_COLUMNS + ["_row"])
 
@@ -93,71 +85,66 @@ def load_leads(sheet):
     data = rows[1:]
 
     df = pd.DataFrame(data, columns=header)
-
-    if "phone" not in df.columns:
-        raise RuntimeError("phone column missing in sheet")
-
     df["phone"] = df["phone"].apply(normalize_phone)
-
-    # actual Google Sheet row number
     df["_row"] = df.index + 2
-
     return df
 
 
 # ======================================================
-# UPSERT LEADS
+# UPSERT LEADS (SAFE)
 # ======================================================
 def upsert_leads(sheet, df: pd.DataFrame):
     df.columns = [c.strip().lower() for c in df.columns]
-
-    if "phone" not in df.columns:
-        raise ValueError("phone column missing before upsert")
-
     df["phone"] = df["phone"].apply(normalize_phone)
-    df = df.reindex(columns=INTERNAL_COLUMNS)
-    df = df.applymap(_safe)
 
     existing = load_leads(sheet)
 
     if existing.empty:
-        sheet.update([INTERNAL_COLUMNS] + df.values.tolist())
+        sheet.update([INTERNAL_COLUMNS] + df.reindex(columns=INTERNAL_COLUMNS).fillna("").values.tolist())
         return
-
-    existing = existing.applymap(_safe)
-    existing["phone"] = existing["phone"].apply(normalize_phone)
 
     existing.set_index("phone", inplace=True)
     df.set_index("phone", inplace=True)
 
     for phone, row in df.iterrows():
-        row_values = [_safe(row.get(col)) for col in INTERNAL_COLUMNS]
-
         if phone in existing.index:
             row_idx = int(existing.loc[phone, "_row"])
-            for col_idx, val in enumerate(row_values, start=1):
+
+            for col in INTERNAL_COLUMNS:
+                if col in PROTECTED_FIELDS:
+                    continue  # 🔒 never overwrite ownership
+
+                val = _safe(row.get(col))
+                col_idx = INTERNAL_COLUMNS.index(col) + 1
                 sheet.update_cell(row_idx, col_idx, val)
+
         else:
-            sheet.append_row(row_values)
+            # New lead → safe defaults
+            new_row = []
+            for col in INTERNAL_COLUMNS:
+                if col in PROTECTED_FIELDS:
+                    new_row.append("")
+                else:
+                    new_row.append(_safe(row.get(col)))
+            sheet.append_row(new_row)
 
 
 # ======================================================
-# ATOMIC PICK (ROW-BASED)
+# ATOMIC PICK (LOCK SAFE)
 # ======================================================
 def atomic_pick(sheet, phone: str, rep_name: str):
     phone = normalize_phone(phone)
     df = load_leads(sheet)
 
     match = df[df["phone"] == phone]
-
     if match.empty:
         return False, "Lead not found"
 
-    row_idx = int(match.iloc[0]["_row"])
-
-    if str(match.iloc[0].get("picked", "")).lower() == "true":
+    row = match.iloc[0]
+    if str(row.get("picked", "")).lower() == "true":
         return False, "Already picked"
 
+    row_idx = int(row["_row"])
     now = datetime.now(timezone.utc).isoformat()
 
     sheet.update_cell(row_idx, INTERNAL_COLUMNS.index("picked") + 1, "TRUE")
