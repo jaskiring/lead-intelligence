@@ -39,18 +39,24 @@ sheet = get_sheet()
 
 # ---------------- CSV NORMALIZER ----------------
 def normalize_csv(df):
-    df.columns = [c.strip().lower() for c in df.columns]
+    df.columns = [c.strip() for c in df.columns]
+
+    phone_candidates = [
+        "phone",
+        "Phone",
+        "phone_number",
+        "Phone Number",
+        "mobile",
+    ]
+
+    for c in phone_candidates:
+        if c in df.columns:
+            df["phone"] = df[c].astype(str)
+            break
 
     if "phone" not in df.columns:
-        for alt in ["phone_number", "mobile", "mobile_number"]:
-            if alt in df.columns:
-                df["phone"] = df[alt]
-                break
+        raise ValueError("CSV must contain phone column")
 
-    if "phone" not in df.columns:
-        raise ValueError("CSV must contain phone or phone_number column")
-
-    df["phone"] = df["phone"].astype(str)
     return df
 
 # ---------------- UI ----------------
@@ -84,17 +90,18 @@ with tabs[1]:
         df = load_leads(sheet)
 
         cols = st.columns(3)
-        for idx, row in df.iterrows():
-            col = cols[idx % 3]
-            phone = str(row.get("phone"))
+        for i, row in df.iterrows():
+            col = cols[i % 3]
+            phone = row["phone"]
 
             with col:
                 st.markdown(
                     f"""
                     <div style="background:#0f172a;padding:14px;border-radius:10px">
                         <h4>📱 {phone}</h4>
-                        <p><b>Intent:</b> {row.get('intent_band')}</p>
-                        <p><b>City:</b> {row.get('which_city_would_you_prefer_for_treatment_')}</p>
+                        <p><b>Intent:</b> {row.get('Intent Band')}</p>
+                        <p><b>City:</b> {row.get('Customer City')}</p>
+                        <p><b>Reason:</b> {row.get("what_is_the_main_reason_you're_considering_lasik_surgery?")}</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -103,7 +110,7 @@ with tabs[1]:
                 if row.get("picked") is True:
                     st.error(f"Picked by {row.get('picked_by')}")
                 else:
-                    if st.button("Pick Lead", key=f"pick_{phone}_{idx}"):
+                    if st.button("Pick Lead", key=f"pick_{phone}_{i}"):
                         ok, msg = atomic_pick(sheet, phone, st.session_state.rep_name)
                         if ok:
                             st.success("Picked")
@@ -131,5 +138,5 @@ with tabs[2]:
             if st.button("Run Scoring + Update"):
                 scored = score_leads(df)
                 scored["last_refresh"] = datetime.now(timezone.utc).isoformat()
-                upsert_leads(sheet, scored, lead_key="phone")
+                upsert_leads(sheet, scored)
                 st.success("Sheet updated successfully")

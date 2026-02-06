@@ -1,70 +1,95 @@
 import pandas as pd
 from datetime import datetime
-import gspread
 
-# ---------------------------
+# --------------------------------
+# NORMALIZE DATAFRAME
+# --------------------------------
+def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    df.columns = [c.strip() for c in df.columns]
+
+    # Map phone variants → phone
+    phone_map = [
+        "phone",
+        "Phone",
+        "phone_number",
+        "Phone Number",
+        "mobile",
+        "Mobile",
+        "Contact Phone",
+    ]
+
+    for col in phone_map:
+        if col in df.columns:
+            df["phone"] = df[col].astype(str)
+            break
+
+    if "phone" not in df.columns:
+        raise ValueError("No phone column found in sheet")
+
+    return df
+
+# --------------------------------
 # LOAD LEADS
-# ---------------------------
+# --------------------------------
 def load_leads(sheet):
     records = sheet.get_all_records()
-    return pd.DataFrame(records)
+    if not records:
+        return pd.DataFrame()
 
-# ---------------------------
-# UPSERT LEADS (SCHEMA SAFE)
-# ---------------------------
+    df = pd.DataFrame(records)
+    return normalize_df(df)
+
+# --------------------------------
+# UPSERT LEADS
+# --------------------------------
 def upsert_leads(sheet, df, lead_key="phone"):
-    existing = sheet.get_all_records()
-    existing_df = pd.DataFrame(existing)
+    df = normalize_df(df)
 
-    # If sheet empty → write headers + data
-    if existing_df.empty:
+    existing = sheet.get_all_records()
+    if not existing:
         sheet.update([df.columns.tolist()] + df.values.tolist())
         return
 
-    # Ensure lead key exists
-    if lead_key not in df.columns:
-        raise KeyError(f"Lead key '{lead_key}' not found in dataframe")
+    existing_df = normalize_df(pd.DataFrame(existing))
 
     existing_df.set_index(lead_key, inplace=True)
     df.set_index(lead_key, inplace=True)
 
-    for key, row in df.iterrows():
-        if key in existing_df.index:
-            row_idx = existing_df.index.get_loc(key) + 2
+    headers = sheet.row_values(1)
+
+    for phone, row in df.iterrows():
+        if phone in existing_df.index:
+            row_idx = existing_df.index.get_loc(phone) + 2
             for col, val in row.items():
-                if col not in existing_df.columns:
-                    continue
-                col_idx = existing_df.columns.get_loc(col) + 1
-                sheet.update_cell(row_idx, col_idx, val)
+                if col in headers:
+                    col_idx = headers.index(col) + 1
+                    sheet.update_cell(row_idx, col_idx, val)
         else:
-            sheet.append_row([row.get(col, "") for col in existing_df.columns])
+            sheet.append_row([row.get(h, "") for h in headers])
 
-# ---------------------------
-# ATOMIC PICK (LOCK SAFE)
-# ---------------------------
+# --------------------------------
+# ATOMIC PICK
+# --------------------------------
 def atomic_pick(sheet, phone, rep_name):
-    data = sheet.get_all_records()
-    df = pd.DataFrame(data)
+    df = load_leads(sheet)
 
-    if df.empty:
-        return False, "No leads available"
-
-    match = df[df["phone"] == phone]
+    match = df[df["phone"] == str(phone)]
     if match.empty:
         return False, "Lead not found"
 
+    row = match.iloc[0]
     row_idx = match.index[0] + 2
 
-    if match.iloc[0].get("picked") is True:
-        return False, f"Already picked by {match.iloc[0].get('picked_by')}"
+    if row.get("picked") is True:
+        return False, f"Already picked by {row.get('picked_by')}"
 
     headers = sheet.row_values(1)
-    picked_col = headers.index("picked") + 1
-    picked_by_col = headers.index("picked_by") + 1
-    picked_at_col = headers.index("picked_at") + 1
 
-    sheet.update_cell(row_idx, picked_col, True)
-    sheet.update_cell(row_idx, picked_by_col, rep_name)
-    sheet.update_cell(row_idx, picked_at_col, datetime.utcnow().isoformat())
+    def col(name):
+        return headers.index(name) + 1
+
+    sheet.update_cell(row_idx, col("picked"), True)
+    sheet.update_cell(row_idx, col("picked_by"), rep_name)
+    sheet.update_cell(row_idx, col("picked_at"), datetime.utcnow().isoformat())
 
     return True, "Picked"
