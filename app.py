@@ -15,6 +15,7 @@ REP_PASSWORDS = st.secrets["auth"]["reps"]
 # ---------------- SESSION ----------------
 if "rep_name" not in st.session_state:
     st.session_state.rep_name = None
+
 if "admin_ok" not in st.session_state:
     st.session_state.admin_ok = False
 
@@ -36,26 +37,20 @@ def get_sheet():
 
 sheet = get_sheet()
 
-# ---------------- SLA ----------------
-def compute_sla(df):
-    if "last_refresh" not in df.columns:
-        return df
+# ---------------- CSV NORMALIZER ----------------
+def normalize_csv(df):
+    df.columns = [c.strip().lower() for c in df.columns]
 
-    now = datetime.now(timezone.utc)
+    if "phone" not in df.columns:
+        for alt in ["phone_number", "mobile", "mobile_number"]:
+            if alt in df.columns:
+                df["phone"] = df[alt]
+                break
 
-    def age_days(ts):
-        try:
-            return (now - datetime.fromisoformat(ts)).days
-        except:
-            return ""
+    if "phone" not in df.columns:
+        raise ValueError("CSV must contain phone or phone_number column")
 
-    df["lead_age_days"] = df["last_refresh"].apply(age_days)
-    df["sla_status"] = df.apply(
-        lambda r: "🔴 Urgent"
-        if r.get("intent_band") == "High" and r.get("lead_age_days", 0) >= 7
-        else "🟢 Within SLA",
-        axis=1,
-    )
+    df["phone"] = df["phone"].astype(str)
     return df
 
 # ---------------- UI ----------------
@@ -68,9 +63,8 @@ tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 with tabs[0]:
     df = load_leads(sheet)
     if df.empty:
-        st.info("No leads available.")
+        st.info("No leads available")
     else:
-        df = compute_sla(df)
         st.dataframe(df, use_container_width=True)
 
 # ================= REP DRAWER =================
@@ -83,45 +77,36 @@ with tabs[1]:
                 st.session_state.rep_name = name
                 st.rerun()
             else:
-                st.error("Invalid credentials")
+                st.error("Invalid password")
     else:
         st.success(f"Logged in as {st.session_state.rep_name}")
 
-        df = compute_sla(load_leads(sheet))
-        available = df.copy()
+        df = load_leads(sheet)
 
         cols = st.columns(3)
-        for idx, row in available.iterrows():
+        for idx, row in df.iterrows():
             col = cols[idx % 3]
+            phone = str(row.get("phone"))
+
             with col:
                 st.markdown(
                     f"""
-                    <div style="background:#111827;padding:16px;border-radius:12px;border:1px solid #1f2937">
-                        <h4>📱 {row.get('phone')}</h4>
-                        <p><b>Intent:</b> {row.get('intent_band')} ({row.get('intent_score')})</p>
-                        <p><b>Timeline:</b> {row.get("when_would_you_prefer_to_undergo_the_lasik_treatment?")}</p>
-                        <p><b>Reason:</b> {row.get("what_is_the_main_reason_you're_considering_lasik_surgery?")}</p>
-                        <p><b>City:</b> {row.get("which_city_would_you_prefer_for_treatment_")}</p>
-                        <p><b>SLA:</b> {row.get("sla_status")}</p>
+                    <div style="background:#0f172a;padding:14px;border-radius:10px">
+                        <h4>📱 {phone}</h4>
+                        <p><b>Intent:</b> {row.get('intent_band')}</p>
+                        <p><b>City:</b> {row.get('which_city_would_you_prefer_for_treatment_')}</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
                 if row.get("picked") is True:
-                    st.error(f"🔒 Picked by {row.get('picked_by')}")
+                    st.error(f"Picked by {row.get('picked_by')}")
                 else:
-                    if st.button(
-                        "✅ Pick Lead",
-                        key=f"pick_{row.get('phone')}",
-                    ):
-                        success, msg = atomic_pick(
-                            sheet,
-                            phone=str(row.get("phone")),
-                            rep_name=st.session_state.rep_name,
-                        )
-                        if success:
-                            st.success("Lead picked")
+                    if st.button("Pick Lead", key=f"pick_{phone}_{idx}"):
+                        ok, msg = atomic_pick(sheet, phone, st.session_state.rep_name)
+                        if ok:
+                            st.success("Picked")
                             st.rerun()
                         else:
                             st.error(msg)
@@ -140,9 +125,11 @@ with tabs[2]:
         uploaded = st.file_uploader("Upload CSV", type=["csv"])
         if uploaded:
             df = pd.read_csv(uploaded)
+            df = normalize_csv(df)
             st.dataframe(df.head())
+
             if st.button("Run Scoring + Update"):
                 scored = score_leads(df)
                 scored["last_refresh"] = datetime.now(timezone.utc).isoformat()
                 upsert_leads(sheet, scored, lead_key="phone")
-                st.success("Sheet updated")
+                st.success("Sheet updated successfully")
