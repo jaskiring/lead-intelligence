@@ -46,14 +46,14 @@ st.title("🧠 Lead Intelligence Portal")
 tabs = st.tabs(["📊 Dashboard", "🧑‍💼 Rep Drawer", "🔐 Admin"])
 
 # ======================================================
-# DASHBOARD
+# DASHBOARD (TABLE VIEW)
 # ======================================================
 with tabs[0]:
     df = load_leads(sheet)
     st.dataframe(df, use_container_width=True)
 
 # ======================================================
-# REP DRAWER
+# REP DRAWER (RICH PROFILE CARDS)
 # ======================================================
 with tabs[1]:
     if not st.session_state.rep:
@@ -78,24 +78,58 @@ with tabs[1]:
 
             for idx, row in df.iterrows():
                 with cols[idx % 3]:
+
                     phone = row.get("phone", "")
                     picked = str(row.get("picked", "")).lower() == "true"
 
+                    # ---------- HEADER
                     st.markdown(
                         f"""
-                        **📞 {phone}**  
-                        🎯 Intent: **{row.get("intent_band", "")}**  
-                        🕒 Timeline: {row.get("timeline", "")}  
-                        🏙 City: {row.get("city", "")}  
+                        ### 📞 {phone}
+                        **{row.get("name", "")}**  
+                        🏙️ {row.get("city", "")}
                         """
                     )
 
+                    st.divider()
+
+                    # ---------- INTENT
+                    st.markdown(
+                        f"""
+                        🔥 **Intent**: `{row.get("intent_band", "")}`  
+                        📊 **Score**: {row.get("intent_score", "")}  
+                        🕒 **Timeline**: {row.get("timeline", "")}
+                        """
+                    )
+
+                    st.divider()
+
+                    # ---------- CONVERSATION / STATUS
+                    st.markdown(
+                        f"""
+                        📞 **Call Outcome**: {row.get("call_outcome", "")}  
+                        ❗ **Objection**: {row.get("objection_type", "")}  
+                        🩺 **Consultation**: {row.get("consultation_status", "")}  
+                        📌 **Status**: {row.get("status", "")}
+                        """
+                    )
+
+                    st.divider()
+
+                    # ---------- PICK / CONTROL
                     if picked:
-                        st.error(f"🔒 Picked by {row.get('picked_by', '')}")
+                        st.error(
+                            f"""
+                            🔒 **Picked**  
+                            👤 {row.get("picked_by", "")}  
+                            ⏱ {row.get("picked_at", "")}
+                            """
+                        )
                     else:
                         if st.button(
                             "✅ Pick Lead",
                             key=f"pick_{idx}_{phone}",
+                            use_container_width=True,
                         ):
                             ok, msg = atomic_pick(
                                 sheet,
