@@ -7,43 +7,29 @@ def score_leads(df: pd.DataFrame) -> pd.DataFrame:
         return pd.notna(x) and str(x).strip() != ""
 
     def medical_score(reason):
-        if not present(reason):
-            return 0
+        if not present(reason): return 0
         r = str(reason).lower()
-        if "power" in r:
-            return 40
-        if "medical" in r:
-            return 35
-        if "lifestyle" in r:
-            return 25
-        if "cosmetic" in r:
-            return 15
-        if "explor" in r:
-            return 5
+        if "power" in r: return 40
+        if "medical" in r: return 35
+        if "lifestyle" in r: return 25
+        if "cosmetic" in r: return 15
+        if "explor" in r: return 5
         return 0
 
     def timeline_score(t):
-        if not present(t):
-            return 0
+        if not present(t): return 0
         t = str(t).lower()
-        if "15" in t or "7" in t:
-            return 20
-        if "30" in t:
-            return 16
-        if "1" in t and "3" in t:
-            return 10
-        if "3" in t and "6" in t:
-            return 5
+        if "7" in t or "15" in t: return 20
+        if "30" in t: return 16
+        if "1" in t and "3" in t: return 10
+        if "3" in t and "6" in t: return 5
         return 0
 
     def location_score(city):
-        if not present(city):
-            return 0
+        if not present(city): return 0
         return 10 if city.strip() in CORE_CITIES else 6
 
-    scores = []
-    bands = []
-    states = []
+    scores, bands, states = [], [], []
 
     for _, row in df.iterrows():
         score = (
@@ -55,17 +41,14 @@ def score_leads(df: pd.DataFrame) -> pd.DataFrame:
         scores.append(score)
 
         if score >= 70:
-            band = "High"
-            state = "High Intent"
+            bands.append("High")
+            states.append("High Intent")
         elif score >= 40:
-            band = "Medium"
-            state = "Follow-up"
+            bands.append("Medium")
+            states.append("Follow-up")
         else:
-            band = "Low"
-            state = "Follow-up"
-
-        bands.append(band)
-        states.append(state)
+            bands.append("Low")
+            states.append("Follow-up")
 
     df["intent_score"] = scores
     df["intent_band"] = bands
