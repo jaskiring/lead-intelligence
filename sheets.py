@@ -23,7 +23,7 @@ INTERNAL_COLUMNS = [
     "last_refresh",
 ]
 
-# Fields that MUST NOT be overwritten by admin upload
+# These must NEVER be overwritten by admin upload
 PROTECTED_FIELDS = {"picked", "picked_by", "picked_at"}
 
 # ======================================================
@@ -52,7 +52,6 @@ def normalize_refrens_csv(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("Refrens CSV must contain column: Phone")
 
     out = pd.DataFrame()
-
     out["phone"] = df["Phone"].apply(normalize_phone)
     out["name"] = df.get("Contact Name", "")
     out["reason"] = df.get(
@@ -85,23 +84,23 @@ def load_leads(sheet):
     df = pd.DataFrame(data, columns=header)
 
     if "phone" not in df.columns:
-        raise RuntimeError("Sheet is missing required column: phone")
+        raise RuntimeError("Sheet missing required column: phone")
 
     df["phone"] = df["phone"].apply(normalize_phone)
-    df["_row"] = df.index + 2  # actual Google Sheet row number
+    df["_row"] = df.index + 2  # actual Google Sheet row
 
     return df
 
 
 # ======================================================
-# UPSERT (SAFE MERGE, NEVER RESET)
+# UPSERT (MERGE-SAFE, NEVER RESET)
 # ======================================================
 def upsert_leads(sheet, df: pd.DataFrame):
     df = df.copy()
     df.columns = [c.strip().lower() for c in df.columns]
 
     if "phone" not in df.columns:
-        raise ValueError("Incoming data missing phone column")
+        raise ValueError("Incoming data missing phone")
 
     df["phone"] = df["phone"].apply(normalize_phone)
     df = df.reindex(columns=INTERNAL_COLUMNS)
@@ -109,7 +108,6 @@ def upsert_leads(sheet, df: pd.DataFrame):
 
     existing = load_leads(sheet)
 
-    # First ever write
     if existing.empty:
         sheet.update([INTERNAL_COLUMNS] + df.values.tolist())
         return
@@ -124,27 +122,21 @@ def upsert_leads(sheet, df: pd.DataFrame):
 
         if phone in existing.index:
             row_idx = int(existing.loc[phone, "_row"])
-
             for col in INTERNAL_COLUMNS:
                 if col in PROTECTED_FIELDS:
-                    continue  # NEVER overwrite pick state
-
-                val = safe(row.get(col))
+                    continue
                 col_idx = INTERNAL_COLUMNS.index(col) + 1
-                sheet.update_cell(row_idx, col_idx, val)
+                sheet.update_cell(row_idx, col_idx, safe(row.get(col)))
         else:
-            # New lead
-            new_row = []
-            for col in INTERNAL_COLUMNS:
-                if col in PROTECTED_FIELDS:
-                    new_row.append("")
-                else:
-                    new_row.append(safe(row.get(col)))
+            new_row = [
+                "" if col in PROTECTED_FIELDS else safe(row.get(col))
+                for col in INTERNAL_COLUMNS
+            ]
             sheet.append_row(new_row)
 
 
 # ======================================================
-# ATOMIC PICK (LOCK ROW SAFELY)
+# ATOMIC PICK
 # ======================================================
 def atomic_pick(sheet, phone: str, rep_name: str):
     phone = normalize_phone(phone)
