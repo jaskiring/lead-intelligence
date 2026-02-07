@@ -67,9 +67,7 @@ def compute_sla(df):
 
     def sla(row):
         if row.get("intent_band") == "High":
-            if row.get("lead_age_days", 0) >= 7:
-                return "URGENT"
-            return "WITHIN_SLA"
+            return "URGENT" if row.get("lead_age_days", 0) >= 7 else "WITHIN_SLA"
         return ""
 
     df["sla_status"] = df.apply(sla, axis=1)
@@ -83,12 +81,13 @@ def sort_by_priority(df):
     df["_sla_rank"] = df["sla_status"].map(sla_rank).fillna(3)
     df["_intent_rank"] = df["intent_band"].map(intent_rank).fillna(3)
 
-    df = df.sort_values(
-        by=["_sla_rank", "_intent_rank", "intent_score"],
-        ascending=[True, True, False],
+    return (
+        df.sort_values(
+            by=["_sla_rank", "_intent_rank", "intent_score"],
+            ascending=[True, True, False],
+        )
+        .drop(columns=["_sla_rank", "_intent_rank"], errors="ignore")
     )
-
-    return df.drop(columns=["_sla_rank", "_intent_rank"], errors="ignore")
 
 # ======================================================
 # UI BASE
@@ -106,20 +105,8 @@ st.markdown(
         background:#020617;
         border:1px solid #1e293b;
     }
-    .badge-urgent {
-        background:#7f1d1d;
-        color:white;
-        padding:4px 8px;
-        border-radius:6px;
-        font-size:12px;
-    }
-    .badge-ok {
-        background:#064e3b;
-        color:white;
-        padding:4px 8px;
-        border-radius:6px;
-        font-size:12px;
-    }
+    .urgent { background:#7f1d1d; padding:4px 8px; border-radius:6px; }
+    .ok { background:#064e3b; padding:4px 8px; border-radius:6px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -133,19 +120,20 @@ tabs = st.tabs([
 ])
 
 # ======================================================
-# CARD RENDERER
+# CARD RENDERER (FIXED + RESTORED)
 # ======================================================
-def render_lead_card(row, allow_pick: bool):
+def render_lead_card(row, allow_pick: bool, key_prefix: str):
     phone = row.get("phone", "")
     picked = str(row.get("picked", "")).lower() == "true"
 
     sla = row.get("sla_status", "")
-    if sla == "URGENT":
-        badge = "<span class='badge-urgent'>🔴 URGENT</span>"
-    elif sla == "WITHIN_SLA":
-        badge = "<span class='badge-ok'>🟢 Within SLA</span>"
-    else:
-        badge = ""
+    badge = (
+        "<span class='urgent'>🔴 URGENT</span>"
+        if sla == "URGENT"
+        else "<span class='ok'>🟢 Within SLA</span>"
+        if sla == "WITHIN_SLA"
+        else ""
+    )
 
     st.markdown(
         f"""
@@ -156,19 +144,37 @@ def render_lead_card(row, allow_pick: bool):
 
         🏙 {row.get("city","")}<br>
         🔥 {row.get("intent_band","")} ({row.get("intent_score","")})<br>
-        🕒 {row.get("timeline","")}<br>
-        ❗ {row.get("objection_type","")}<br>
-        🩺 {row.get("consultation_status","")}<br>
-        📌 {row.get("status","")}
+        🕒 {row.get("timeline","")}<br><br>
+
+        🧠 <b>Reason</b>: {row.get("reason","")}<br>
+        ❗ <b>Objection</b>: {row.get("objection_type","")}<br>
+        🩺 <b>Consultation</b>: {row.get("consultation_status","")}<br>
+        📌 <b>Status</b>: {row.get("status","")}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    # ---------- ACTION / RETRY GUIDANCE (RESTORED)
+    objection = str(row.get("objection_type","")).lower()
+    if "timing" in objection:
+        st.info("⏳ Action: Create urgency using age, outcomes, limited slots")
+    elif "cost" in objection:
+        st.info("💰 Action: Reframe value, financing, ROI of surgery")
+    elif row.get("consultation_status","").lower() == "not offered":
+        st.info("🩺 Action: Offer low-commitment consultation")
+    else:
+        st.info("🧠 Action: Trust building + education")
+
+    # ---------- PICK LOGIC (FIXED KEY)
     if picked:
         st.error(f"🔒 Picked by {row.get('picked_by','')}")
     elif allow_pick:
-        if st.button("✅ Pick Lead", key=f"pick_{phone}", use_container_width=True):
+        if st.button(
+            "✅ Pick Lead",
+            key=f"{key_prefix}_{row['_row']}",
+            use_container_width=True,
+        ):
             ok, msg = atomic_pick(sheet, phone, st.session_state.rep)
             if ok:
                 st.rerun()
@@ -190,12 +196,11 @@ with tabs[0]:
                 st.error("Invalid password")
     else:
         df = sort_by_priority(compute_sla(load_leads(sheet)))
-        rows = [df.iloc[i:i+3] for i in range(0, len(df), 3)]
-        for group in rows:
+        for i in range(0, len(df), 3):
             cols = st.columns(3)
-            for col, (_, row) in zip(cols, group.iterrows()):
+            for col, (_, row) in zip(cols, df.iloc[i:i+3].iterrows()):
                 with col:
-                    render_lead_card(row, allow_pick=True)
+                    render_lead_card(row, True, "rep")
 
 # ======================================================
 # MY LEADS
@@ -204,49 +209,28 @@ with tabs[1]:
     if st.session_state.rep:
         df = compute_sla(load_leads(sheet))
         mine = df[df["picked_by"] == st.session_state.rep]
-        rows = [mine.iloc[i:i+3] for i in range(0, len(mine), 3)]
-        for group in rows:
+        for i in range(0, len(mine), 3):
             cols = st.columns(3)
-            for col, (_, row) in zip(cols, group.iterrows()):
+            for col, (_, row) in zip(cols, mine.iloc[i:i+3].iterrows()):
                 with col:
-                    render_lead_card(row, allow_pick=False)
+                    render_lead_card(row, False, "mine")
 
 # ======================================================
-# RECOVERABLE LEADS (NOW PICKABLE ✅)
+# RECOVERABLE LEADS (PICK ENABLED)
 # ======================================================
 with tabs[2]:
     df = compute_sla(load_leads(sheet))
 
     recoverable = df[
         (df["intent_band"].isin(["High", "Medium"]))
-        & (~df["consultation_status"].str.lower().isin(["done"]))
-        & (
-            df["status"].str.lower().isin(["lost", "offered but declined"])
-            | df["status"].str.lower().str.contains("lost", na=False)
-        )
+        & df["status"].str.lower().isin(["lost", "offered but declined"])
     ]
 
-    if recoverable.empty:
-        st.info("No recoverable leads at the moment.")
-    else:
-        recoverable = sort_by_priority(recoverable)
-        rows = [recoverable.iloc[i:i+3] for i in range(0, len(recoverable), 3)]
-
-        for group in rows:
-            cols = st.columns(3)
-            for col, (_, row) in zip(cols, group.iterrows()):
-                with col:
-                    render_lead_card(row, allow_pick=True)
-
-                    objection = str(row.get("objection_type","")).lower()
-                    if "timing" in objection:
-                        st.info("⏳ Retry angle: Create urgency (age, outcomes, slots)")
-                    elif "cost" in objection:
-                        st.info("💰 Retry angle: Reframe value / financing")
-                    elif row.get("consultation_status","").lower() == "not offered":
-                        st.info("🩺 Retry angle: Low-commitment consultation reassurance")
-                    else:
-                        st.info("🧠 Retry angle: Trust + education")
+    for i in range(0, len(recoverable), 3):
+        cols = st.columns(3)
+        for col, (_, row) in zip(cols, recoverable.iloc[i:i+3].iterrows()):
+            with col:
+                render_lead_card(row, True, "recover")
 
 # ======================================================
 # ADMIN
