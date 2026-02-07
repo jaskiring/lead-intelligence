@@ -222,9 +222,24 @@ with tabs[2]:
     df = compute_sla(load_leads(sheet))
 
     recoverable = df[
-        (df["intent_band"].isin(["High", "Medium"]))
-        & df["status"].str.lower().isin(["lost", "offered but declined"])
-    ]
+    (df["intent_band"].isin(["High", "Medium"]))
+    & (df["picked"].astype(str).str.lower() != "true")
+    & (
+        df["status"].str.lower().isin([
+            "lost",
+            "offered but declined",
+            "open"
+        ])
+    )
+    & (
+        df["consultation_status"].str.lower().isin([
+            "not offered",
+            "scheduled",
+            "offered but declined",
+            ""
+        ])
+    )
+]
 
     for i in range(0, len(recoverable), 3):
         cols = st.columns(3)
