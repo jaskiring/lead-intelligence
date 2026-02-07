@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from sheets import atomic_assign
 from datetime import datetime, timezone
 
 from sheets import (
